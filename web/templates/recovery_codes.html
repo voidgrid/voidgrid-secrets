@@ -1,0 +1,7 @@
+{{define "content"}}
+<h1>recovery codes</h1>
+<p class="muted">Save these somewhere safe now - they're shown exactly once and can't be recovered later, only regenerated (which invalidates these). Each one works a single time, as a fallback login path if you lose your authenticator device or your OIDC provider is unreachable.</p>
+<pre class="recovery-codes">{{range .Codes}}{{.}}
+{{end}}</pre>
+<p><a href="{{.ContinueTo}}">I've saved these, continue</a></p>
+{{end}}

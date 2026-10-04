@@ -1,0 +1,67 @@
+# Example docker-compose setup for voidgrid-secrets, plus a sketch of how
+# a *consumer* service pulls a secret out of it for its own .env.
+#
+# One-time setup before first `docker compose up`:
+#
+#   docker compose -f deploy/docker-compose.example.yml run --rm \
+#     --entrypoint /usr/local/bin/voidgrid-secrets voidgrid-secrets \
+#     keygen -path /run/secrets/voidgrid-root-key
+#
+# That writes the root key into the voidgrid-root-key volume. Losing it
+# makes every secret permanently unrecoverable, so back that volume up
+# like you would any other secret material - it is the master key for
+# everything else.
+
+services:
+  voidgrid-secrets:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
+    image: voidgrid-secrets:v0.1.0
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      VOIDGRID_RQLITE_ADDR: http://127.0.0.1:4001
+      VOIDGRID_LISTEN_ADDR: 0.0.0.0:8443
+      VOIDGRID_ROOT_KEY_PATH: /run/secrets/voidgrid-root-key
+    volumes:
+      - voidgrid-data:/data
+      - voidgrid-root-key:/run/secrets
+
+  # --- Example consumer: a service that needs a secret voidgrid-secrets
+  # manages, injected into its own .env via a machine token.
+  #
+  # 1. In the voidgrid-secrets web UI (or API), create a machine token and
+  #    grant it "read" on the specific secret(s) this service needs.
+  # 2. Put that token in this service's own .env (or docker secret) as
+  #    VOIDGRID_TOKEN - never commit it.
+  # 3. On startup, the consumer calls voidgrid-secrets' API to fetch the
+  #    secret value it needs:
+  #
+  #      curl -sf -H "Authorization: Bearer $VOIDGRID_TOKEN" \
+  #        http://voidgrid-secrets:8443/api/v1/secrets/<id> \
+  #        | jq -r .value
+  #
+  #    A common pattern is a small entrypoint wrapper script that does this
+  #    fetch and exports the result as an env var before exec'ing the
+  #    service's real command - swap the commented-out block below for
+  #    whatever that service actually needs.
+  #
+  # example-consumer:
+  #   image: your-other-service:latest
+  #   depends_on:
+  #     - voidgrid-secrets
+  #   env_file:
+  #     - ./example-consumer.env   # contains VOIDGRID_TOKEN=vgs_...
+  #   entrypoint:
+  #     - sh
+  #     - -c
+  #     - |
+  #       export DB_PASSWORD=$$(curl -sf -H "Authorization: Bearer $$VOIDGRID_TOKEN" \
+  #         http://voidgrid-secrets:8443/api/v1/secrets/1 | jq -r .value)
+  #       exec your-real-entrypoint "$$@"
+
+volumes:
+  voidgrid-data:
+  voidgrid-root-key:

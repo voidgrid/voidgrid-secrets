@@ -1,0 +1,21 @@
+{{define "content"}}
+<h1>first-run setup: OIDC</h1>
+<p class="muted">No admin account exists yet. Configure your identity provider to continue - the first person to log in via OIDC becomes the admin.</p>
+<form class="stack" method="post" action="/setup/oidc">
+    <label>issuer URL
+        <input type="url" name="issuer" placeholder="https://accounts.example.com" required autofocus>
+    </label>
+    <label>client ID
+        <input type="text" name="client_id" required>
+    </label>
+    <label>client secret
+        <input type="password" name="client_secret" required>
+    </label>
+    <label>redirect URI
+        <input type="url" name="redirect_uri" value="{{.SuggestedRedirectURI}}" required>
+    </label>
+    <p class="muted">Register the redirect URI above with your provider exactly as shown - it must match precisely.</p>
+    <button type="submit">configure OIDC</button>
+</form>
+<p class="muted">— or <a href="/setup">use a password instead</a> —</p>
+{{end}}

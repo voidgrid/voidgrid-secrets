@@ -1,0 +1,14 @@
+{{define "content"}}
+<h1>first-run setup</h1>
+<p class="muted">No admin account exists yet. Create one to continue. You'll enroll TOTP in the next step.</p>
+<form class="stack" method="post" action="/setup">
+    <label>username
+        <input type="text" name="username" required autofocus>
+    </label>
+    <label>password
+        <input type="password" name="password" minlength="14" required>
+    </label>
+    <button type="submit">create admin account</button>
+</form>
+<p class="muted">— or <a href="/setup/oidc">configure OIDC</a> instead —</p>
+{{end}}

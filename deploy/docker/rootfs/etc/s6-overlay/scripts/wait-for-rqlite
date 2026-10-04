@@ -1,0 +1,16 @@
+#!/bin/sh
+# rqlited's own process starting doesn't mean it's accepting requests yet
+# (Raft needs to elect itself leader as a single node first). The app
+# service depends on the rqlited-ready oneshot (see its up script) rather
+# than on rqlited directly, so it waits for an actual ready response, not
+# just a running process.
+#
+# This lives in its own file, invoked via a plain `exec` from the oneshot
+# up script, rather than inline in that script: s6-rc's oneshot up/down
+# files don't get full shell interpretation of multi-line control flow
+# (a loop like this one fails there with "unable to exec until"), but a
+# single `exec /path/to/this/file` line is unambiguous either way, and the
+# kernel's normal shebang handling takes over once this file is exec'd.
+until wget -q -O /dev/null http://127.0.0.1:4001/readyz; do
+    sleep 0.5
+done

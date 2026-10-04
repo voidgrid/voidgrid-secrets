@@ -1,0 +1,25 @@
+{{define "content"}}
+<h1>token #{{.Token.ID}}</h1>
+<p class="muted">{{.Token.Description}}</p>
+
+<h2>grant access</h2>
+<form class="stack" method="post" action="/admin/tokens/{{.Token.ID}}/acls">
+    <label>resource type
+        <select name="resource_type">
+            <option value="secret">secret</option>
+            <option value="group">group</option>
+        </select>
+    </label>
+    <label>resource id
+        <input type="number" name="resource_id" required>
+    </label>
+    <label>permission
+        <select name="permission">
+            <option value="read">read</option>
+            <option value="write">write</option>
+        </select>
+    </label>
+    <button type="submit">grant</button>
+</form>
+<div class="actions"><a href="/admin/tokens">back to tokens</a></div>
+{{end}}

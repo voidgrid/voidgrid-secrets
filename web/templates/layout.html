@@ -1,0 +1,29 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>voidgrid-secrets</title>
+    {{if .RefreshTo}}<meta http-equiv="refresh" content="0;url={{.RefreshTo}}">{{end}}
+    <link rel="stylesheet" href="/static/terminal.css">
+</head>
+<body>
+    <header class="topbar">
+        <span class="brand">voidgrid-secrets &gt;_</span>
+        {{if .User}}
+        <nav>
+            <a href="/secrets">secrets</a>
+            {{if .User.IsAdmin}}<a href="/admin/users">users</a><a href="/admin/groups">groups</a><a href="/admin/tokens">tokens</a>{{end}}
+            <span class="muted">{{.User.Username}}</span>
+            <form class="inline-form" method="post" action="/logout"><button type="submit">logout</button></form>
+        </nav>
+        {{end}}
+    </header>
+    <main>
+        {{if .Error}}<div class="flash-error">{{.Error}}</div>{{end}}
+        {{template "content" .}}
+    </main>
+    <footer>voidgrid-secrets</footer>
+</body>
+</html>
+{{end}}

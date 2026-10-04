@@ -1,0 +1,20 @@
+{{define "content"}}
+<h1>login</h1>
+{{if eq .AuthMethod "oidc"}}
+<p><a href="/login/oidc">sign in with OIDC</a></p>
+{{else}}
+<form class="stack" method="post" action="/login">
+    <label>username
+        <input type="text" name="username" value="{{.Username}}" required autofocus>
+    </label>
+    <label>password
+        <input type="password" name="password" required>
+    </label>
+    <label>totp code
+        <input type="text" name="totp_code" inputmode="numeric" pattern="[0-9]{6}" required>
+    </label>
+    <button type="submit">log in</button>
+</form>
+{{end}}
+<p class="muted">— or <a href="/login/recovery">use a recovery code</a> —</p>
+{{end}}

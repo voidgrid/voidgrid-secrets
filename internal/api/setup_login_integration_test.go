@@ -1,0 +1,218 @@
+package api_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pquerna/otp/totp"
+
+	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
+)
+
+func doJSON(t *testing.T, handler http.Handler, method, path string, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestWizardLocksOutSecretsUntilSetupComplete(t *testing.T) {
+	e := newEnv(t, false)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/secrets/1", nil)
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+}
+
+func TestWizardLocksOutLoginUntilSetupComplete(t *testing.T) {
+	e := newEnv(t, false)
+
+	rec := doJSON(t, e.handler, http.MethodPost, "/api/v1/auth/login", `{"username":"admin","password":"x","totp_code":"123456"}`, nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+}
+
+func TestWizardLocksOutAdminUntilSetupComplete(t *testing.T) {
+	e := newEnv(t, false)
+
+	rec := doJSON(t, e.handler, http.MethodGet, "/api/v1/admin/users", "", nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+}
+
+func TestSetupStatusAlwaysReachable(t *testing.T) {
+	e := newEnv(t, false)
+
+	rec := doJSON(t, e.handler, http.MethodGet, "/api/v1/setup/status", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body struct {
+		Complete bool `json:"complete"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Complete {
+		t.Fatal("expected setup to be incomplete on a fresh environment")
+	}
+}
+
+func TestFullSetupAndLoginFlow(t *testing.T) {
+	e := newEnv(t, false)
+
+	initRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/init",
+		`{"username":"admin","password":"correct horse battery staple"}`, nil)
+	if initRec.Code != http.StatusOK {
+		t.Fatalf("init status = %d, want %d; body=%s", initRec.Code, http.StatusOK, initRec.Body.String())
+	}
+	var initBody struct {
+		Secret          string `json:"secret"`
+		ProvisioningURI string `json:"provisioning_uri"`
+	}
+	if err := json.NewDecoder(initRec.Body).Decode(&initBody); err != nil {
+		t.Fatalf("decode init response: %v", err)
+	}
+	if initBody.Secret == "" {
+		t.Fatal("expected a non-empty TOTP secret")
+	}
+
+	// Setup is not complete yet: secrets, login, and admin must still be
+	// locked out.
+	statusRec := doJSON(t, e.handler, http.MethodGet, "/api/v1/setup/status", "", nil)
+	var status struct {
+		Complete bool `json:"complete"`
+	}
+	_ = json.NewDecoder(statusRec.Body).Decode(&status)
+	if status.Complete {
+		t.Fatal("expected setup to still be incomplete before TOTP confirmation")
+	}
+
+	code, err := totp.GenerateCode(initBody.Secret, time.Now())
+	if err != nil {
+		t.Fatalf("GenerateCode: %v", err)
+	}
+
+	confirmRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/confirm",
+		fmt.Sprintf(`{"username":"admin","code":%q}`, code), nil)
+	if confirmRec.Code != http.StatusOK && confirmRec.Code != http.StatusNoContent {
+		t.Fatalf("confirm status = %d, want 200/204; body=%s", confirmRec.Code, confirmRec.Body.String())
+	}
+
+	// Setup endpoints are now locked out in the other direction.
+	reinitRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/init",
+		`{"username":"admin2","password":"another password here"}`, nil)
+	if reinitRec.Code != http.StatusConflict {
+		t.Fatalf("re-init status = %d, want %d", reinitRec.Code, http.StatusConflict)
+	}
+
+	// Now log in.
+	loginRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/auth/login",
+		fmt.Sprintf(`{"username":"admin","password":"correct horse battery staple","totp_code":%q}`, code), nil)
+	if loginRec.Code != http.StatusNoContent && loginRec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want 200/204; body=%s", loginRec.Code, loginRec.Body.String())
+	}
+	setCookie := loginRec.Header().Get("Set-Cookie")
+	if !strings.Contains(setCookie, gosession.CookieName+"=") {
+		t.Fatalf("expected Set-Cookie to contain %s=, got %q", gosession.CookieName, setCookie)
+	}
+
+	// The now-admin user can reach the admin routes.
+	cookieParts := strings.SplitN(strings.TrimPrefix(setCookie, gosession.CookieName+"="), ";", 2)
+	sessionCookie := &http.Cookie{Name: gosession.CookieName, Value: cookieParts[0]} //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
+
+	adminRec := doJSON(t, e.handler, http.MethodGet, "/api/v1/admin/users", "", sessionCookie)
+	if adminRec.Code != http.StatusOK {
+		t.Fatalf("admin status = %d, want %d; body=%s", adminRec.Code, http.StatusOK, adminRec.Body.String())
+	}
+
+	// Logout clears the cookie.
+	logoutRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/auth/logout", "", sessionCookie)
+	if logoutRec.Code != http.StatusNoContent && logoutRec.Code != http.StatusOK {
+		t.Fatalf("logout status = %d, want 200/204; body=%s", logoutRec.Code, logoutRec.Body.String())
+	}
+	clearedCookie := logoutRec.Header().Get("Set-Cookie")
+	if !strings.Contains(clearedCookie, "Max-Age=0") {
+		t.Fatalf("expected logout Set-Cookie to clear the cookie (Max-Age=0), got %q", clearedCookie)
+	}
+}
+
+func TestLoginRejectsWrongTOTPAfterSetup(t *testing.T) {
+	e := newEnv(t, false)
+
+	initRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/init",
+		`{"username":"admin","password":"correct horse battery staple"}`, nil)
+	var initBody struct {
+		Secret string `json:"secret"`
+	}
+	_ = json.NewDecoder(initRec.Body).Decode(&initBody)
+
+	code, _ := totp.GenerateCode(initBody.Secret, time.Now())
+	doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/confirm",
+		fmt.Sprintf(`{"username":"admin","code":%q}`, code), nil)
+
+	loginRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/auth/login",
+		`{"username":"admin","password":"correct horse battery staple","totp_code":"000000"}`, nil)
+	if loginRec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body=%s", loginRec.Code, http.StatusUnauthorized, loginRec.Body.String())
+	}
+}
+
+func TestNonAdminSessionCannotReachAdminRoutes(t *testing.T) {
+	e := newEnv(t, true)
+
+	user, err := e.users.CreateWithPassword(t.Context(), "plain-user", "x")
+	if err != nil {
+		t.Fatalf("CreateWithPassword: %v", err)
+	}
+	sessionToken, _, err := e.sessions.Create(t.Context(), user.ID, gosession.DefaultTTL)
+	if err != nil {
+		t.Fatalf("sessions.Create: %v", err)
+	}
+	sessionCookie := &http.Cookie{Name: gosession.CookieName, Value: sessionToken} //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
+
+	rec := doJSON(t, e.handler, http.MethodGet, "/api/v1/admin/users", "", sessionCookie)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
+func TestMachineTokenCannotReachAdminRoutes(t *testing.T) {
+	e := newEnv(t, true)
+
+	user, err := e.users.CreateWithPassword(t.Context(), "token-owner", "x")
+	if err != nil {
+		t.Fatalf("CreateWithPassword: %v", err)
+	}
+	plaintext, _, err := e.tokens.Create(t.Context(), "some-machine", user.ID, nil)
+	if err != nil {
+		t.Fatalf("tokens.Create: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	// Admin routes are session-only: a bearer token isn't even recognized
+	// as a form of authentication there, so this is 401, not 403.
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}

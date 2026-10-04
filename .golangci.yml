@@ -1,0 +1,18 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - gosec
+    - unconvert
+    - unparam
+  settings:
+    gosec:
+      excludes:
+        # G120: flags every r.FormValue/r.PostFormValue call textually,
+        # with no control-flow awareness of whether the body was already
+        # size-limited earlier in the same handler. internal/web's
+        # parseForm() helper (internal/web/helpers.go) wraps every form
+        # read with http.MaxBytesReader before any FormValue call, so this
+        # rule has no real finding left to make here - just noise.
+        - G120

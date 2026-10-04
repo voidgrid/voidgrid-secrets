@@ -1,0 +1,18 @@
+{{define "content"}}
+<h1>enroll totp</h1>
+{{if .Secret}}
+<p class="muted">Scan this with your authenticator app, then enter a code to confirm. This secret is shown only once.</p>
+<img src="{{.QRCodeDataURI}}" alt="TOTP enrollment QR code" width="240" height="240">
+<p>can't scan? secret: <code>{{.Secret}}</code></p>
+<p>or open directly: <a href="{{.ProvisioningURI}}">{{.ProvisioningURI}}</a></p>
+{{else}}
+<p class="muted">Enter the current code from your authenticator app.</p>
+{{end}}
+<form class="stack" method="post" action="/setup/confirm">
+    <input type="hidden" name="username" value="{{.Username}}">
+    <label>totp code
+        <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" required autofocus>
+    </label>
+    <button type="submit">confirm and finish setup</button>
+</form>
+{{end}}
