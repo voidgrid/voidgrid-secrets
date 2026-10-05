@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -77,16 +78,26 @@ func (h *TokensHandler) SubmitRevoke(w http.ResponseWriter, r *http.Request) {
 type tokenDetailPage struct {
 	basePage
 	Token model.MachineToken
+	// SecretGrants lists the token's secret grants with the effective
+	// environment variable name each is exposed under.
+	SecretGrants []model.EnvGrant
+	// GroupGrants lists the token's group grants.
+	GroupGrants []model.TokenACL
 }
 
-// Detail shows a token's grant-access form.
+// Detail shows a token's grants and the grant-access form.
 func (h *TokensHandler) Detail(w http.ResponseWriter, r *http.Request) {
-	user, _ := session.FromContext(r.Context())
 	id, err := idParam(r, "id")
 	if err != nil {
 		http.Error(w, "invalid token id", http.StatusBadRequest)
 		return
 	}
+	h.renderDetail(w, r, id, http.StatusOK, "")
+}
+
+// renderDetail renders a token's detail page, optionally with an error.
+func (h *TokensHandler) renderDetail(w http.ResponseWriter, r *http.Request, id int64, status int, errMsg string) {
+	user, _ := session.FromContext(r.Context())
 
 	tokens, err := h.tokens.List(r.Context())
 	if err != nil {
@@ -105,7 +116,29 @@ func (h *TokensHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	render(w, http.StatusOK, "token_detail", tokenDetailPage{basePage: basePage{User: &user}, Token: *found})
+	secretGrants, err := h.tokens.EnvGrants(r.Context(), id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	acls, err := h.tokens.ListACLs(r.Context(), id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var groupGrants []model.TokenACL
+	for _, a := range acls {
+		if a.ResourceType == "group" {
+			groupGrants = append(groupGrants, a)
+		}
+	}
+
+	render(w, status, "token_detail", tokenDetailPage{
+		basePage:     basePage{User: &user, Error: errMsg},
+		Token:        *found,
+		SecretGrants: secretGrants,
+		GroupGrants:  groupGrants,
+	})
 }
 
 // SubmitAddACL grants a machine token permission on a secret or group.
@@ -121,11 +154,23 @@ func (h *TokensHandler) SubmitAddACL(w http.ResponseWriter, r *http.Request) {
 	}
 	resourceID, err := parseFormInt64(r, "resource_id")
 	if err != nil {
-		http.Error(w, "invalid resource id", http.StatusBadRequest)
+		h.renderDetail(w, r, id, http.StatusBadRequest, "invalid resource id")
 		return
 	}
 
-	if err := h.tokens.AddACL(r.Context(), id, r.FormValue("resource_type"), resourceID, r.FormValue("permission")); err != nil {
+	err = h.tokens.AddACL(r.Context(), id, r.FormValue("resource_type"), resourceID, r.FormValue("permission"), r.FormValue("env_name"))
+	switch {
+	case err == nil:
+	case errors.Is(err, storage.ErrInvalidEnvName):
+		h.renderDetail(w, r, id, http.StatusBadRequest, "invalid environment variable name: use uppercase letters, digits and underscores, not starting with a digit (env names apply to secret grants only)")
+		return
+	case errors.Is(err, storage.ErrEnvNameTaken):
+		h.renderDetail(w, r, id, http.StatusConflict, "another secret on this token already uses that environment variable name - set a different one")
+		return
+	case errors.Is(err, storage.ErrSecretNotFound):
+		h.renderDetail(w, r, id, http.StatusNotFound, "no secret with that id")
+		return
+	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

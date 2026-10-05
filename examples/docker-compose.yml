@@ -1,5 +1,6 @@
-# Example docker compose setup for voidgrid-secrets, plus a sketch of how a
-# *consumer* service pulls a secret out of it for its own .env.
+# Example docker compose setup for voidgrid-secrets, plus (commented out)
+# a consumer service that gets its secrets at startup via
+# `voidgrid-secrets run` - never written to disk or into `docker inspect`.
 #
 # One-time setup before the first `docker compose up` - generate the root
 # encryption key into the voidgrid-root-key volume:
@@ -7,8 +8,8 @@
 #   docker compose -f examples/docker-compose.yml run --rm --entrypoint /usr/local/bin/voidgrid-secrets voidgrid-secrets keygen -path /run/secrets/voidgrid-root-key
 #
 # Losing that key makes every stored secret permanently unrecoverable, so
-# back the volume up like any other secret material. See docs/deployment.md
-# and docs/authentication.md for the rest.
+# back the volume up like any other secret material. See docs/deployment.md,
+# docs/authentication.md and docs/runtime-injection.md for the rest.
 
 services:
   voidgrid-secrets:
@@ -23,34 +24,41 @@ services:
       - voidgrid-data:/data
       - voidgrid-root-key:/run/secrets
 
-  # --- Example consumer: a service that needs a secret voidgrid-secrets
-  # manages, injected into its own environment via a machine token.
+  # --- Example consumer. Uncomment this block, the voidgrid-bin volume and
+  # the secrets block at the bottom.
   #
-  # 1. In the voidgrid-secrets web UI (admin > tokens), create a machine
-  #    token and grant it "read" on the specific secret(s) this service
-  #    needs. The token is shown once.
-  # 2. Put that token in this service's own .env (or a docker secret) as
-  #    VOIDGRID_TOKEN - never commit it.
-  # 3. On startup, the consumer fetches the value from the API:
+  # 1. In the web UI (admin > tokens), create a token for this service and
+  #    grant it "read" on each secret it needs, with the environment
+  #    variable name the app expects (or leave it blank to derive one).
+  # 2. Save the token (shown once) to ./example-consumer-voidgrid-token,
+  #    readable by the user the consumer runs as. Never commit it.
+  # 3. After `--`, restate the image's original entrypoint and command.
   #
-  #      curl -sf -H "Authorization: Bearer $VOIDGRID_TOKEN" http://voidgrid-secrets:8443/api/v1/secrets/<id> | jq -r .value
-  #
-  #    A small entrypoint wrapper that does this fetch, exports the result,
-  #    and then execs the service's real command is the usual pattern.
+  # voidgrid-secrets-bin:
+  #   image: ghcr.io/voidgrid/voidgrid-secrets:beta
+  #   entrypoint: ["cp", "/usr/local/bin/voidgrid-secrets", "/export/voidgrid-secrets"]
+  #   volumes:
+  #     - voidgrid-bin:/export
   #
   # example-consumer:
   #   image: your-other-service:latest
   #   depends_on:
-  #     - voidgrid-secrets
-  #   env_file:
-  #     - ./example-consumer.env   # contains VOIDGRID_TOKEN=vgs_...
-  #   entrypoint:
-  #     - sh
-  #     - -c
-  #     - |
-  #       export DB_PASSWORD=$$(curl -sf -H "Authorization: Bearer $$VOIDGRID_TOKEN" http://voidgrid-secrets:8443/api/v1/secrets/1 | jq -r .value)
-  #       exec your-real-entrypoint "$$@"
+  #     voidgrid-secrets-bin:
+  #       condition: service_completed_successfully
+  #   environment:
+  #     VOIDGRID_URL: http://voidgrid-secrets:8443
+  #   secrets:
+  #     - voidgrid-token
+  #   volumes:
+  #     - voidgrid-bin:/opt/voidgrid:ro
+  #   entrypoint: ["/opt/voidgrid/voidgrid-secrets", "run", "--"]
+  #   command: ["your-real-entrypoint", "--its-args"]
 
 volumes:
   voidgrid-data:
   voidgrid-root-key:
+  # voidgrid-bin:
+
+# secrets:
+#   voidgrid-token:
+#     file: ./example-consumer-voidgrid-token

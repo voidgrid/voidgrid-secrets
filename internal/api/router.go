@@ -23,6 +23,7 @@ type Deps struct {
 	SetupHandler   *SetupHandler
 	AuthHandler    *AuthHandler
 	SecretsHandler *SecretsHandler
+	EnvHandler     *EnvHandler
 	SharesHandler  *SharesHandler
 	UsersHandler   *UsersHandler
 	GroupsHandler  *GroupsHandler
@@ -43,6 +44,9 @@ type Deps struct {
 //   - secrets/* accepts EITHER a machine-token bearer header OR a human
 //     session cookie, authorizing via the token's ACLs or the session
 //     user's ownership/group-membership/sharing access respectively.
+//   - env is machine-token-only: every secret the token may read, with
+//     the environment variable name each is exposed under, for
+//     `voidgrid-secrets run`.
 //   - secrets/{id}/shares/* is session-only: sharing is a human decision,
 //     not something a machine token should ever do.
 //   - admin/* (users, groups, machine tokens) is session-only AND requires
@@ -62,6 +66,10 @@ func NewRouter(deps Deps) http.Handler {
 	v1Secrets := huma.NewGroup(v1)
 	v1Secrets.UseMiddleware(secretsAuthMiddleware(humaAPI, deps.TokenAuth, deps.SessionAuth))
 	RegisterSecrets(v1Secrets, deps.SecretsHandler)
+
+	v1Env := huma.NewGroup(v1)
+	v1Env.UseMiddleware(tokenAuthMiddleware(humaAPI, deps.TokenAuth))
+	RegisterEnv(v1Env, deps.EnvHandler)
 
 	v1Shares := huma.NewGroup(v1)
 	v1Shares.UseMiddleware(sessionAuthMiddleware(humaAPI, deps.SessionAuth))

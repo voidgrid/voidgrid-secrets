@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -161,6 +162,7 @@ type AddTokenACLInput struct {
 		ResourceType string `json:"resource_type" enum:"secret,group"`
 		ResourceID   int64  `json:"resource_id"`
 		Permission   string `json:"permission" enum:"read,write"`
+		EnvName      string `json:"env_name,omitempty" doc:"Secret grants only: the environment variable name 'voidgrid-secrets run' exposes this secret under. Omit to derive it from the secret's name (db-password -> DB_PASSWORD)."`
 	}
 }
 
@@ -169,7 +171,15 @@ type AddTokenACLOutput struct{}
 
 // AddACL grants a machine token permission on a secret or group.
 func (h *TokensHandler) AddACL(ctx context.Context, in *AddTokenACLInput) (*AddTokenACLOutput, error) {
-	if err := h.tokens.AddACL(ctx, in.ID, in.Body.ResourceType, in.Body.ResourceID, in.Body.Permission); err != nil {
+	if err := h.tokens.AddACL(ctx, in.ID, in.Body.ResourceType, in.Body.ResourceID, in.Body.Permission, in.Body.EnvName); err != nil {
+		switch {
+		case errors.Is(err, storage.ErrInvalidEnvName):
+			return nil, huma.Error400BadRequest(err.Error())
+		case errors.Is(err, storage.ErrEnvNameTaken):
+			return nil, huma.Error409Conflict(err.Error())
+		case errors.Is(err, storage.ErrSecretNotFound):
+			return nil, huma.Error404NotFound(err.Error())
+		}
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
 	return &AddTokenACLOutput{}, nil

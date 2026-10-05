@@ -2,6 +2,33 @@
 <h1>token #{{.Token.ID}}</h1>
 <p class="muted">{{.Token.Description}}</p>
 
+<h2>secrets this token can read</h2>
+{{if .SecretGrants}}
+<table>
+    <thead><tr><th>secret</th><th>id</th><th>permission</th><th>environment variable</th></tr></thead>
+    <tbody>
+    {{range .SecretGrants}}
+    <tr><td>{{.SecretName}}</td><td>{{.SecretID}}</td><td>{{.Permission}}</td><td><code>{{.EnvName}}</code></td></tr>
+    {{end}}
+    </tbody>
+</table>
+<p class="muted"><code>voidgrid-secrets run</code> exposes each secret under its environment variable name.</p>
+{{else}}
+<p class="muted">none yet</p>
+{{end}}
+
+{{if .GroupGrants}}
+<h2>group grants</h2>
+<table>
+    <thead><tr><th>group id</th><th>permission</th></tr></thead>
+    <tbody>
+    {{range .GroupGrants}}
+    <tr><td>{{.ResourceID}}</td><td>{{.Permission}}</td></tr>
+    {{end}}
+    </tbody>
+</table>
+{{end}}
+
 <h2>grant access</h2>
 <form class="stack" method="post" action="/admin/tokens/{{.Token.ID}}/acls">
     <label>resource type
@@ -18,6 +45,9 @@
             <option value="read">read</option>
             <option value="write">write</option>
         </select>
+    </label>
+    <label>environment variable name (secrets only, optional)
+        <input type="text" name="env_name" pattern="[A-Z_][A-Z0-9_]*" placeholder="derived from the secret name if blank">
     </label>
     <button type="submit">grant</button>
 </form>

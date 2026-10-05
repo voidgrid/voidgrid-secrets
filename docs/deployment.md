@@ -84,10 +84,21 @@ These are set in the image; you normally don't need to change them.
 
 ## Using secrets from other containers
 
-Create a machine token in the web UI (admin > tokens), grant it access to
-specific secrets, and have the consuming container fetch values from
-`/api/v1/secrets/{id}` with `Authorization: Bearer <token>`. The token is
-shown once. `examples/docker-compose.yml` has a worked sketch.
+Create a machine token in the web UI (admin > tokens) for each consuming
+service and grant it read on just the secrets it needs. The token is
+shown once.
+
+The recommended way to use it is `voidgrid-secrets run`, which wraps the
+consuming container's command and injects every granted secret at
+startup, as environment variables or as files on an in-memory mount,
+without writing them to disk or exposing them in `docker inspect`. See
+[runtime-injection.md](runtime-injection.md) and the example in
+`examples/docker-compose.yml`.
+
+Tokens can also call the API directly: `GET /api/v1/env` returns every
+secret the token may read with its environment variable name, and
+`GET /api/v1/secrets/{id}` returns one secret, both with
+`Authorization: Bearer <token>`.
 
 The full API is documented by the running instance itself: interactive
 docs at `/docs`, the OpenAPI 3.1 spec at `/openapi.json`.

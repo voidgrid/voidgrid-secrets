@@ -77,6 +77,7 @@ func runServer(cfg config.Config) error {
 		SetupHandler:   api.NewSetupHandler(wizard, oidcProvider),
 		AuthHandler:    api.NewAuthHandler(loginService, sessionRepo),
 		SecretsHandler: api.NewSecretsHandler(secretRepo),
+		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, auditRepo),
 		SharesHandler:  api.NewSharesHandler(secretRepo, shareRepo),
 		UsersHandler:   api.NewUsersHandler(userRepo),
 		GroupsHandler:  api.NewGroupsHandler(groupRepo),

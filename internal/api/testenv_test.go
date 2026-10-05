@@ -33,6 +33,9 @@ type env struct {
 	groups         *storage.GroupRepo
 	sessions       *storage.SessionRepo
 	authConfigRepo *storage.AuthConfigRepo
+	// baseURL is the test rqlited's HTTP address, for assertions that
+	// query tables directly (e.g. audit_log).
+	baseURL string
 }
 
 // newEnv starts a fresh rqlited instance, wires up every repo/handler, and
@@ -115,6 +118,7 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		SetupHandler:   api.NewSetupHandler(wizard, &oidcclient.Provider{}),
 		AuthHandler:    api.NewAuthHandler(loginService, sessionRepo),
 		SecretsHandler: api.NewSecretsHandler(secretRepo),
+		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, storage.NewAuditRepo(db)),
 		SharesHandler:  api.NewSharesHandler(secretRepo, shareRepo),
 		UsersHandler:   api.NewUsersHandler(userRepo),
 		GroupsHandler:  api.NewGroupsHandler(groupRepo),
@@ -132,6 +136,7 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		groups:         groupRepo,
 		sessions:       sessionRepo,
 		authConfigRepo: authConfigRepo,
+		baseURL:        baseURL,
 	}
 }
 

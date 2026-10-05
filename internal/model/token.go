@@ -22,4 +22,17 @@ type TokenACL struct {
 	ResourceType string // "secret" or "group"
 	ResourceID   int64
 	Permission   string // "read" or "write"
+	// EnvName is the explicit environment variable name a secret grant is
+	// exposed under by `voidgrid-secrets run`, or "" to derive it from the
+	// secret's name (see internal/envname). Unused for group grants.
+	EnvName string
+}
+
+// EnvGrant is one secret a machine token can read, with the effective
+// environment variable name it's exposed under.
+type EnvGrant struct {
+	SecretID   int64
+	SecretName string
+	EnvName    string
+	Permission string
 }

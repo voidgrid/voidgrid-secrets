@@ -80,7 +80,7 @@ func TestAPIRevealSucceedsWithACL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "read"); err != nil {
+	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "read", ""); err != nil {
 		t.Fatalf("AddACL: %v", err)
 	}
 
@@ -121,7 +121,7 @@ func TestAPIUpdateRequiresWriteNotReadACL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "read"); err != nil {
+	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "read", ""); err != nil {
 		t.Fatalf("AddACL: %v", err)
 	}
 
@@ -154,7 +154,7 @@ func TestAPIUpdateSucceedsWithWriteACLAndRotatesValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "write"); err != nil {
+	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "write", ""); err != nil {
 		t.Fatalf("AddACL: %v", err)
 	}
 

@@ -11,9 +11,12 @@ import (
 
 func main() {
 	var err error
-	if len(os.Args) > 1 && os.Args[1] == "keygen" {
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "keygen":
 		err = runKeygen(os.Args[2:])
-	} else {
+	case len(os.Args) > 1 && os.Args[1] == "run":
+		err = runInject(os.Args[2:])
+	default:
 		err = run()
 	}
 	if err != nil {

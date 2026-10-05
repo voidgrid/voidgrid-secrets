@@ -43,8 +43,12 @@ unprivileged as UID/GID 1000.
 - [docs/authentication.md](docs/authentication.md) - the setup wizard,
   password + TOTP, OIDC (including the callback URL to register with your
   provider), recovery codes, and sessions.
+- [docs/runtime-injection.md](docs/runtime-injection.md) -
+  `voidgrid-secrets run`: give another container its secrets at startup,
+  as environment variables or tmpfs files, without writing them to disk.
 - [examples/docker-compose.yml](examples/docker-compose.yml) - a complete
-  compose example, including a consumer service fetching a secret.
+  compose example, including a consumer service that gets its secrets via
+  `voidgrid-secrets run`.
 
 ## API
 
@@ -52,8 +56,9 @@ The API is spec-first (via `huma`): a running instance serves interactive
 docs at `/docs` and the OpenAPI 3.1 spec at `/openapi.json`. Automated
 consumers authenticate with scoped, admin-issued machine tokens (bearer
 tokens); the web UI uses password + TOTP or OIDC sessions.
-`/api/v1/secrets/*` accepts either; `/api/v1/admin/*` is
-session-and-admin only.
+`/api/v1/secrets/*` accepts either; `/api/v1/env` (all of a token's
+secrets at once, used by `voidgrid-secrets run`) is machine-token only;
+`/api/v1/admin/*` is session-and-admin only.
 
 ## Development
 

@@ -20,23 +20,9 @@ import (
 func secretsAuthMiddleware(api huma.API, tokenAuthr token.Authenticator, sessionAuthr gosession.Authenticator) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		if header := ctx.Header("Authorization"); strings.HasPrefix(header, "Bearer ") {
-			plaintext := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-			if plaintext == "" {
-				_ = huma.WriteErr(api, ctx, 401, "missing bearer token")
-				return
+			if authed, ok := authenticateBearer(api, ctx, tokenAuthr, header); ok {
+				next(authed)
 			}
-
-			mt, acls, err := tokenAuthr.Authenticate(ctx.Context(), plaintext)
-			if err != nil {
-				if errors.Is(err, token.ErrInvalidToken) {
-					_ = huma.WriteErr(api, ctx, 401, "invalid or expired token")
-					return
-				}
-				_ = huma.WriteErr(api, ctx, 500, "internal error")
-				return
-			}
-
-			next(huma.WithContext(ctx, token.WithAuth(ctx.Context(), mt, acls)))
 			return
 		}
 
@@ -58,6 +44,45 @@ func secretsAuthMiddleware(api huma.API, tokenAuthr token.Authenticator, session
 
 		next(huma.WithContext(ctx, gosession.WithAuth(ctx.Context(), user)))
 	}
+}
+
+// tokenAuthMiddleware requires a machine-token bearer header, with no
+// session fallback. Used for /env, which exists only for automated
+// consumers (`voidgrid-secrets run`), never for a logged-in human.
+func tokenAuthMiddleware(api huma.API, tokenAuthr token.Authenticator) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		header := ctx.Header("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			_ = huma.WriteErr(api, ctx, 401, "machine token required (Authorization: Bearer ...)")
+			return
+		}
+		if authed, ok := authenticateBearer(api, ctx, tokenAuthr, header); ok {
+			next(authed)
+		}
+	}
+}
+
+// authenticateBearer validates a "Bearer <token>" header and returns the
+// context carrying the machine token and its ACLs. On failure it has
+// already written the error response and returns ok=false.
+func authenticateBearer(api huma.API, ctx huma.Context, tokenAuthr token.Authenticator, header string) (huma.Context, bool) {
+	plaintext := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+	if plaintext == "" {
+		_ = huma.WriteErr(api, ctx, 401, "missing bearer token")
+		return nil, false
+	}
+
+	mt, acls, err := tokenAuthr.Authenticate(ctx.Context(), plaintext)
+	if err != nil {
+		if errors.Is(err, token.ErrInvalidToken) {
+			_ = huma.WriteErr(api, ctx, 401, "invalid or expired token")
+			return nil, false
+		}
+		_ = huma.WriteErr(api, ctx, 500, "internal error")
+		return nil, false
+	}
+
+	return huma.WithContext(ctx, token.WithAuth(ctx.Context(), mt, acls)), true
 }
 
 // sessionAuthMiddleware requires a valid session cookie, with no bearer

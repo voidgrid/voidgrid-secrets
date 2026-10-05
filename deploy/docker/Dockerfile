@@ -62,12 +62,14 @@ COPY deploy/docker/rootfs/ /
 
 # Nothing here needs root, so the whole container - s6-overlay included -
 # runs as UID/GID 1000. s6-overlay can run unprivileged as long as /run is
-# writable by that user. /data and /run/secrets are created and owned by
-# 1000 here so fresh named volumes mounted there inherit that ownership.
+# writable by that user. /data, /run/secrets and /export are created and
+# owned by 1000 here so fresh named volumes mounted there inherit that
+# ownership. /export is where a one-shot compose service copies this
+# binary for other containers to use `voidgrid-secrets run` from.
 RUN addgroup -g 1000 voidgrid && \
     adduser -D -H -u 1000 -G voidgrid voidgrid && \
-    mkdir -p /data/rqlite /run/secrets && \
-    chown -R 1000:1000 /data /run
+    mkdir -p /data/rqlite /run/secrets /export && \
+    chown -R 1000:1000 /data /run /export
 USER 1000:1000
 
 ENV VOIDGRID_RQLITE_ADDR=http://127.0.0.1:4001 \
