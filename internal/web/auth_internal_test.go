@@ -30,3 +30,23 @@ func TestRenderMarksPagesNoStore(t *testing.T) {
 		t.Fatalf("got Cache-Control %q, want no-store", got)
 	}
 }
+
+func TestSecurityHeadersAreSet(t *testing.T) {
+	h := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/login", nil))
+
+	want := map[string]string{
+		"Content-Security-Policy": webCSP,
+		"X-Frame-Options":         "DENY",
+		"X-Content-Type-Options":  "nosniff",
+		"Referrer-Policy":         "same-origin",
+	}
+	for k, v := range want {
+		if got := rec.Header().Get(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+}

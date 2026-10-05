@@ -26,6 +26,7 @@ type Deps struct {
 // everything else behind a session (and, for /admin/*, an admin session).
 func NewRouter(deps Deps) http.Handler {
 	r := chi.NewMux()
+	r.Use(securityHeaders)
 
 	r.Handle("/static/*", http.FileServerFS(webassets.FS))
 
@@ -87,4 +88,24 @@ func NewRouter(deps Deps) http.Handler {
 	})
 
 	return r
+}
+
+// webCSP allows only this origin's own assets. img-src also allows data:
+// URIs for the server-rendered TOTP QR code; no template uses inline
+// scripts or styles, so neither needs an exception.
+const webCSP = "default-src 'self'; img-src 'self' data:; object-src 'none'; " +
+	"base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+// securityHeaders sets the hardening headers every web UI response gets:
+// no framing (clickjacking), no MIME sniffing, no cross-origin Referer
+// (the OIDC callback URL carries the auth code in its query string).
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", webCSP)
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }

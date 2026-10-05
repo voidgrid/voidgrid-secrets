@@ -76,11 +76,17 @@ func NewRouter(deps Deps) http.Handler {
 	return router
 }
 
-// noStore marks every API response uncacheable: responses carry secret
-// values, fresh machine tokens, and recovery codes.
+// noStore marks every API response uncacheable (responses carry secret
+// values, fresh machine tokens, and recovery codes) and sets the
+// hardening headers that apply to a JSON API. No CSP here: the /docs page
+// huma serves loads its viewer from a CDN.
 func noStore(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
+		h := w.Header()
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})
 }

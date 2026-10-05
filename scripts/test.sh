@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Docker-first test: runs `go test -race ./...` inside the official Go
-# image. Uses the Debian-based (not alpine) image because -race needs
-# CGO, which needs a C toolchain that alpine's Go image doesn't ship.
-# Integration tests that need a real rqlited binary skip themselves
-# (exec.LookPath check) since this image doesn't have one either -
-# that's a known gap, not a silent false pass - the skip count is printed.
+# Docker-first test: runs `go test -race ./...` in the Dockerfile's
+# `testenv` stage - the same Go + C toolchain + rqlited the image build's
+# test gate uses, so the database integration tests run here too. The
+# stage is built (and cached) from deploy/docker/Dockerfile on each run;
+# after the first build that's a cache hit.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/_run.sh"
+
+TESTENV_IMAGE=voidgrid-secrets-testenv
+
+# The testenv stage copies nothing from the build context, so a small
+# context directory keeps this fast (the repo root would send .dev/ caches).
+run_logged testenv docker build \
+  --target testenv \
+  -t "$TESTENV_IMAGE" \
+  -f "$ROOT/deploy/docker/Dockerfile" \
+  "$ROOT/deploy/docker" || exit $?
 
 mkdir -p "$ROOT/.dev/gocache" "$ROOT/.dev/gomodcache"
 
@@ -19,13 +28,13 @@ run_logged test docker run --rm \
   -v "$ROOT":/src -w /src \
   -v "$ROOT/.dev/gocache":/cache/go-build \
   -v "$ROOT/.dev/gomodcache":/cache/gomod \
-  golang:1.26 \
+  "$TESTENV_IMAGE" \
   go test -race -v ./...
 status=$?
 
 skipped=$(grep -c '^--- SKIP' "$ROOT/.dev/logs/test.log" || true)
 if [ "$skipped" -gt 0 ]; then
-  echo "note: $skipped test(s) skipped (likely rqlited not available in this image)"
+  echo "note: $skipped test(s) skipped"
 fi
 
 exit "$status"

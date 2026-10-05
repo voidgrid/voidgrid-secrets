@@ -14,7 +14,15 @@ func TestNoStoreMarksResponsesUncacheable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil))
 
-	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
-		t.Fatalf("got Cache-Control %q, want no-store", got)
+	want := map[string]string{
+		"Cache-Control":          "no-store",
+		"X-Frame-Options":        "DENY",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "same-origin",
+	}
+	for k, v := range want {
+		if got := rec.Header().Get(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
 	}
 }

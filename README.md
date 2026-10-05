@@ -4,50 +4,56 @@
 
 ## Requirements
 
-- Docker (the only thing needed to build, run, or develop this project -
-  see "Development" below)
+- Docker - the only thing needed to run, build, or develop this project.
+- A reverse proxy that terminates HTTPS in front of it (Caddy, Traefik,
+  nginx): the app serves plain HTTP and its session cookies require HTTPS.
+- Optionally, an OIDC identity provider (e.g. Pocket ID) if you'd rather
+  not use password + TOTP sign-in.
 
 ## Quick start
 
-```
-docker compose -f deploy/docker-compose.example.yml run --rm \
-  --entrypoint /usr/local/bin/voidgrid-secrets voidgrid-secrets \
-  keygen -path /run/secrets/voidgrid-root-key
-docker compose -f deploy/docker-compose.example.yml up -d
-```
+The image is published at `ghcr.io/voidgrid/voidgrid-secrets` and runs
+unprivileged as UID/GID 1000.
 
-The first command generates the root encryption key. **Back up the
-`voidgrid-root-key` volume it writes to like you would any other secret
-material** — losing it makes every secret in the store permanently
-unrecoverable, with no other recovery path.
+1. Generate the root encryption key (once):
 
-See `deploy/docker-compose.example.yml` for the full example, including a
-sketch of how a consumer service pulls a secret into its own `.env` via a
-machine token, and `deploy/docker/README.md` for the equivalent plain
-`docker run` commands.
+   ```
+   docker compose -f examples/docker-compose.yml run --rm --entrypoint /usr/local/bin/voidgrid-secrets voidgrid-secrets keygen -path /run/secrets/voidgrid-root-key
+   ```
 
-## Configuration
+   **Back up the `voidgrid-root-key` volume like any other secret
+   material** - losing the key makes every stored secret permanently
+   unrecoverable.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `VOIDGRID_LISTEN_ADDR` | `0.0.0.0:8443` | Address the API + web UI bind to |
-| `VOIDGRID_RQLITE_ADDR` | `http://127.0.0.1:4001` | rqlite HTTP API (internal, same container) |
-| `VOIDGRID_ROOT_KEY_PATH` | `/run/secrets/voidgrid-root-key` | Root encryption key file |
-| `RQLITE_DATA_DIR` | `/data/rqlite` | rqlite's on-disk data directory |
+2. Start it:
 
-The app has no TLS of its own; put a reverse proxy (Caddy, Traefik, nginx)
-in front of it for HTTPS. Session cookies are marked `Secure`, so the web
-UI's login will not work over plain HTTP from a real browser — this is
-intentional, matching how most homelab reverse-proxy setups already
-terminate TLS before traffic reaches application containers.
+   ```
+   docker compose -f examples/docker-compose.yml up -d
+   ```
+
+3. Before exposing it anywhere you don't trust, open `/setup` and complete
+   the first-run wizard - until that's done, anyone who can reach the
+   instance can claim the admin account.
+
+## Documentation
+
+- [docs/deployment.md](docs/deployment.md) - running the image, the root
+  key, volumes, HTTPS, restarts, environment variables, using secrets from
+  other containers.
+- [docs/authentication.md](docs/authentication.md) - the setup wizard,
+  password + TOTP, OIDC (including the callback URL to register with your
+  provider), recovery codes, and sessions.
+- [examples/docker-compose.yml](examples/docker-compose.yml) - a complete
+  compose example, including a consumer service fetching a secret.
 
 ## API
 
-The API is spec-first (via `huma`), with an OpenAPI 3.1 spec and docs UI
-served at `/docs` on a running instance. Automated consumers (the
-docker/`.env` use case) authenticate with scoped, admin-issued bearer
-tokens; the web UI uses password+TOTP or OIDC sessions. `/api/v1/secrets/*`
-accepts either; `/api/v1/admin/*` is session+admin-only.
+The API is spec-first (via `huma`): a running instance serves interactive
+docs at `/docs` and the OpenAPI 3.1 spec at `/openapi.json`. Automated
+consumers authenticate with scoped, admin-issued machine tokens (bearer
+tokens); the web UI uses password + TOTP or OIDC sessions.
+`/api/v1/secrets/*` accepts either; `/api/v1/admin/*` is
+session-and-admin only.
 
 ## Development
 
@@ -61,14 +67,22 @@ script under `scripts/`:
 | `make vet` | `go vet` (`scripts/vet.sh`) |
 | `make test` | `go test -race ./...` (`scripts/test.sh`) |
 | `make lint` | golangci-lint (`scripts/lint.sh`) |
+| `make lint-workflows` | actionlint on the GitHub Actions workflows (`scripts/actionlint.sh`) |
 | `make fmt` | gofumpt (`scripts/fmt.sh`) |
+| `make live-test` | Live tests against a real OIDC provider (`scripts/live-test.sh`) |
 | `make run` | Builds, then runs the binary directly |
 | `make docker-build` | Builds the full container image |
 | `make dev` | Local rqlite + app dev loop (`scripts/dev.sh`) |
 
-The production `Dockerfile`'s build stage runs `go vet` and
-`go test -race` itself, with a real `rqlited` binary available, so a
-failing test fails the image build — not just a separate CI step.
+Tests gate the image: the Dockerfile's build stage runs `go vet` and
+`go test -race` against a real `rqlited`, so a failing test fails the
+build. `make test` runs the same suite in the same toolchain (the
+Dockerfile's `testenv` stage, built and cached on first use), including
+the database integration tests.
+
+`make live-test` reads its settings from a `.env` at the repo root - copy
+`env.example` and fill it in. It errors if `.env` is missing and skips if
+anything is still `CHANGEME`.
 
 Build/test/lint output is logged in full under `.dev/logs/` (gitignored);
 only a short pass/fail result prints to the terminal.
