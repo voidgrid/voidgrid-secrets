@@ -35,4 +35,7 @@ type EnvGrant struct {
 	SecretName string
 	EnvName    string
 	Permission string
+	// SecretUpdatedAt is when the secret's value last changed, so a client
+	// polling GET /env can tell whether anything it holds is stale.
+	SecretUpdatedAt time.Time
 }

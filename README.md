@@ -45,10 +45,12 @@ unprivileged as UID/GID 1000.
   provider), recovery codes, and sessions.
 - [docs/runtime-injection.md](docs/runtime-injection.md) -
   `voidgrid-secrets run`: give another container its secrets at startup,
-  as environment variables or tmpfs files, without writing them to disk.
+  as environment variables or tmpfs files, without writing them to disk;
+  and `voidgrid-secrets agent`: a sidecar that keeps consumers' secrets
+  as files on a shared in-memory volume, with no wrapper.
 - [examples/docker-compose.yml](examples/docker-compose.yml) - a complete
-  compose example, including a consumer service that gets its secrets via
-  `voidgrid-secrets run`.
+  compose example, including consumer services that get their secrets via
+  `voidgrid-secrets run` and via the agent.
 
 ## API
 

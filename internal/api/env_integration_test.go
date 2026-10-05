@@ -230,3 +230,87 @@ func TestEnvRejectsDuplicateNamesWithoutLeakingValues(t *testing.T) {
 		t.Fatalf("audit rows = %d, want 0 (nothing was revealed)", n)
 	}
 }
+
+func getEnvIfNoneMatch(t *testing.T, e env, plaintext, etag string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/env", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestEnvETagSkipsUnchangedPollsWithoutAuditing(t *testing.T) {
+	e := newEnv(t, true)
+	ctx := context.Background()
+
+	owner, err := e.users.CreateWithPassword(ctx, "env-owner-5", "x")
+	if err != nil {
+		t.Fatalf("CreateWithPassword: %v", err)
+	}
+	first, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "first", []byte("v1"), owner.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	second, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "second", []byte("v2"), owner.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	plaintext, mt, err := e.tokens.Create(ctx, "svc", owner.ID, nil)
+	if err != nil {
+		t.Fatalf("tokens.Create: %v", err)
+	}
+	if err := e.tokens.AddACL(ctx, mt.ID, "secret", first.ID, "read", ""); err != nil {
+		t.Fatalf("AddACL: %v", err)
+	}
+
+	rec := getEnvIfNoneMatch(t, e, plaintext, "")
+	etag := rec.Header().Get("ETag")
+	if rec.Code != http.StatusOK || etag == "" {
+		t.Fatalf("first fetch: status = %d, ETag = %q", rec.Code, etag)
+	}
+
+	// Unchanged: 304, no body values, no new audit rows.
+	rec = getEnvIfNoneMatch(t, e, plaintext, etag)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("unchanged poll: status = %d, want 304; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "v1") {
+		t.Fatal("304 response carried a value")
+	}
+	if got := rec.Header().Get("ETag"); got != etag {
+		t.Fatalf("304 ETag = %q, want %q", got, etag)
+	}
+	if n := countTokenReveals(t, e.baseURL, mt.ID); n != 1 {
+		t.Fatalf("audit rows after unchanged poll = %d, want 1", n)
+	}
+
+	// Value update changes the ETag.
+	time.Sleep(5 * time.Millisecond)
+	if _, err := e.secrets.Update(ctx, first.ID, []byte("v1-new")); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	rec = getEnvIfNoneMatch(t, e, plaintext, etag)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "v1-new") {
+		t.Fatalf("after update: status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	afterUpdate := rec.Header().Get("ETag")
+	if afterUpdate == etag {
+		t.Fatal("ETag did not change after a value update")
+	}
+
+	// A new grant changes the ETag.
+	if err := e.tokens.AddACL(ctx, mt.ID, "secret", second.ID, "read", ""); err != nil {
+		t.Fatalf("AddACL: %v", err)
+	}
+	rec = getEnvIfNoneMatch(t, e, plaintext, afterUpdate)
+	if rec.Code != http.StatusOK || rec.Header().Get("ETag") == afterUpdate {
+		t.Fatalf("after new grant: status = %d, ETag unchanged = %v", rec.Code, rec.Header().Get("ETag") == afterUpdate)
+	}
+	if n := countTokenReveals(t, e.baseURL, mt.ID); n != 4 {
+		t.Fatalf("audit rows = %d, want 4 (1 + 1 after update + 2 after new grant)", n)
+	}
+}

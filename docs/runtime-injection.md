@@ -10,6 +10,11 @@ written to disk and never appear in `docker inspect`.
 voidgrid-secrets run [--url URL] [--token-file PATH] [--files DIR] [--timeout 30s] -- command [args...]
 ```
 
+If the consuming image reads its secrets from files (`*_FILE` variables),
+[agent mode](#agent-mode-no-wrapper) avoids wrapping it at all: one
+sidecar keeps every consumer's secrets as files on a shared in-memory
+volume, and picks up changed values without a restart.
+
 Why not compose `environment:` or a `.env` file? Anything set there is
 resolved on the host and stored in the container's configuration on disk,
 readable by anyone who can run `docker inspect`. `run` injects inside the
@@ -163,3 +168,126 @@ themselves.
   `http://voidgrid-secrets:8443` never leaves the host. Across hosts, use
   the HTTPS address behind your reverse proxy.
 - **Per-secret grants only.** A token's group grants aren't used by `run`.
+
+## Agent mode: no wrapper
+
+`voidgrid-secrets agent` runs as its own container and keeps each
+consumer's secrets as files on a shared in-memory volume. The consumer
+needs no wrapper, no copy of the binary and no entrypoint changes - only
+a volume mount and the `*_FILE` variables its image already supports.
+
+```
+voidgrid-secrets agent --url URL --out DIR --target NAME=TOKEN_FILE,gid=GID [--target ...] [--interval 1m] [--timeout 30s]
+```
+
+Each `--target` is one consumer: the subdirectory its files go in
+(`DIR/NAME`), the token whose grants decide what goes there, and the group
+allowed to read them. Give every consumer its own token, exactly as with
+`run`; the agent only carries them, it never widens what a token can read.
+
+### How the files are protected
+
+- The volume is tmpfs, so nothing reaches disk. The agent refuses to
+  start if `--out` isn't an in-memory filesystem.
+- Each consumer mounts only its own subdirectory (`subpath`), so it can't
+  see any other consumer's files.
+- Files are mode 0440 and owned by the target's group; the subdirectory
+  is 0750. The agent runs unprivileged (UID 1000) and can only give files
+  to a group it's a member of, so every target's GID goes in the agent's
+  `group_add`. The consumer reads its files as that group - its own
+  primary group, or one added with `group_add`. Consumers running as root
+  can read them regardless.
+- Values are replaced by writing a new file and renaming it over the old
+  one, so the application never reads a partial value.
+
+### Example
+
+A Postgres consumer (the official image runs as UID/GID 999):
+
+```yaml
+services:
+  voidgrid-agent:
+    image: ghcr.io/voidgrid/voidgrid-secrets:beta
+    entrypoint: ["/usr/local/bin/voidgrid-secrets", "agent"]
+    command:
+      - --url=http://voidgrid-secrets:8443
+      - --out=/out
+      - --target=postgres=/run/secrets/postgres-token,gid=999
+    group_add: ["999"]
+    secrets:
+      - postgres-token
+    volumes:
+      - voidgrid-out:/out
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/voidgrid-agent-ready"]
+      interval: 5s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    depends_on:
+      voidgrid-agent:
+        condition: service_healthy
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/voidgrid/POSTGRES_PASSWORD
+    volumes:
+      - type: volume
+        source: voidgrid-out
+        target: /run/voidgrid
+        read_only: true
+        volume:
+          subpath: postgres
+
+volumes:
+  voidgrid-out:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=1m,uid=1000,gid=1000,mode=0700"
+
+secrets:
+  postgres-token:
+    file: ./postgres-voidgrid-token
+```
+
+For a consumer whose image runs as a different user, add the target's
+GID to that consumer's `group_add` too. Token files must be readable by
+the agent (UID 1000).
+
+### Agent behavior
+
+- **Startup:** the agent checks its configuration first (in-memory
+  `--out`, membership of every target's group, readable token files) and
+  exits without contacting the server if any check fails. It then writes
+  every target, retrying for up to `--timeout` while the server is
+  unreachable or starting; a rejected token fails startup. Once every
+  target is written it creates `/tmp/voidgrid-agent-ready`, which the
+  healthcheck above waits for - so `service_healthy` means the files are
+  there.
+- **Changes:** every `--interval` (1 minute by default) it asks the
+  server whether anything changed. Unchanged checks return no values and
+  add nothing to the audit log; a changed value is rewritten, a newly
+  granted secret appears, and a file whose grant is gone is removed. Every
+  value actually handed out is audited as a reveal by that target's
+  token, as with `run`.
+- **Picking up a change:** the agent replaces the file; it doesn't
+  restart or signal the consumer (that would need the Docker socket).
+  Applications that read the file once at startup need a restart to see
+  the new value.
+- **Server down:** the last values stay in place and the outage is
+  logged once.
+- **Token revoked or expired:** that target's files are removed, and come
+  back if access is restored.
+- The token file is re-read on every check, so replacing it takes effect
+  without restarting the agent.
+- Logs name targets and variable names only, never values.
+
+### Agent limits
+
+- Needs Docker Engine 26.0 or newer, for mounting a volume's subdirectory
+  (`subpath`).
+- The tokens still reach the agent as files on the host's disk, as with
+  `run`.
+- Files only: an image that only reads plain environment variables still
+  needs `run`.
+- Per-secret grants only, as with `run`.

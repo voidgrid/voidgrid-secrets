@@ -16,6 +16,8 @@ func main() {
 		err = runKeygen(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "run":
 		err = runInject(os.Args[2:])
+	case len(os.Args) > 1 && os.Args[1] == "agent":
+		err = runAgent(os.Args[2:])
 	default:
 		err = run()
 	}

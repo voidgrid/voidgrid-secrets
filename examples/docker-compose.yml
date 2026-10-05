@@ -1,6 +1,9 @@
 # Example docker compose setup for voidgrid-secrets, plus (commented out)
-# a consumer service that gets its secrets at startup via
-# `voidgrid-secrets run` - never written to disk or into `docker inspect`.
+# two ways for other services to get their secrets - never written to disk
+# or into `docker inspect`:
+#   - `voidgrid-secrets run` wraps a consumer's command (any image);
+#   - `voidgrid-secrets agent` is a sidecar that keeps consumers' secrets
+#     as files on a shared in-memory volume (images with *_FILE support).
 #
 # One-time setup before the first `docker compose up` - generate the root
 # encryption key into the voidgrid-root-key volume:
@@ -54,11 +57,62 @@ services:
   #   entrypoint: ["/opt/voidgrid/voidgrid-secrets", "run", "--"]
   #   command: ["your-real-entrypoint", "--its-args"]
 
+  # --- Example agent consumer. Uncomment this block, the voidgrid-out
+  # volume and the postgres-token secret at the bottom.
+  #
+  # 1. Create a token for this service and grant it "read" on its secrets,
+  #    as above (e.g. db-password under the name POSTGRES_PASSWORD).
+  # 2. Save the token to ./postgres-voidgrid-token, readable by UID 1000
+  #    (the agent). Never commit it.
+  # 3. gid=999 is the group the official postgres image runs as. For any
+  #    other consumer, use its group - or pick one and add it to that
+  #    consumer's group_add. Every target's GID goes in the agent's
+  #    group_add.
+  #
+  # voidgrid-agent:
+  #   image: ghcr.io/voidgrid/voidgrid-secrets:beta
+  #   entrypoint: ["/usr/local/bin/voidgrid-secrets", "agent"]
+  #   command:
+  #     - --url=http://voidgrid-secrets:8443
+  #     - --out=/out
+  #     - --target=postgres=/run/secrets/postgres-token,gid=999
+  #   group_add: ["999"]
+  #   secrets:
+  #     - postgres-token
+  #   volumes:
+  #     - voidgrid-out:/out
+  #   healthcheck:
+  #     test: ["CMD", "test", "-f", "/tmp/voidgrid-agent-ready"]
+  #     interval: 5s
+  #   restart: unless-stopped
+  #
+  # postgres:
+  #   image: postgres:17
+  #   depends_on:
+  #     voidgrid-agent:
+  #       condition: service_healthy
+  #   environment:
+  #     POSTGRES_PASSWORD_FILE: /run/voidgrid/POSTGRES_PASSWORD
+  #   volumes:
+  #     - type: volume
+  #       source: voidgrid-out
+  #       target: /run/voidgrid
+  #       read_only: true
+  #       volume:
+  #         subpath: postgres
+
 volumes:
   voidgrid-data:
   voidgrid-root-key:
   # voidgrid-bin:
+  # voidgrid-out:
+  #   driver_opts:
+  #     type: tmpfs
+  #     device: tmpfs
+  #     o: "size=1m,uid=1000,gid=1000,mode=0700"
 
 # secrets:
 #   voidgrid-token:
 #     file: ./example-consumer-voidgrid-token
+#   postgres-token:
+#     file: ./postgres-voidgrid-token

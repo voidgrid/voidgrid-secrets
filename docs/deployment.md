@@ -91,8 +91,11 @@ shown once.
 The recommended way to use it is `voidgrid-secrets run`, which wraps the
 consuming container's command and injects every granted secret at
 startup, as environment variables or as files on an in-memory mount,
-without writing them to disk or exposing them in `docker inspect`. See
-[runtime-injection.md](runtime-injection.md) and the example in
+without writing them to disk or exposing them in `docker inspect`. For
+images that read secrets from files (`*_FILE` variables), agent mode
+needs no wrapper at all: a sidecar keeps each consumer's secrets as files
+on a shared in-memory volume and updates them when they change. See
+[runtime-injection.md](runtime-injection.md) and the examples in
 `examples/docker-compose.yml`.
 
 Tokens can also call the API directly: `GET /api/v1/env` returns every

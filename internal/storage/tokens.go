@@ -243,7 +243,7 @@ func (r *TokenRepo) listACLs(ctx context.Context, tokenID int64) ([]model.TokenA
 // name, or one derived from the secret's name. Ordered by secret ID.
 func (r *TokenRepo) EnvGrants(ctx context.Context, tokenID int64) ([]model.EnvGrant, error) {
 	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
-		Query: `SELECT s.id, s.name, a.env_name, a.permission
+		Query: `SELECT s.id, s.name, a.env_name, a.permission, s.updated_at
 			FROM machine_token_acls a JOIN secrets s ON s.id = a.resource_id
 			WHERE a.token_id = ? AND a.resource_type = 'secret'
 			ORDER BY s.id`,
@@ -256,12 +256,18 @@ func (r *TokenRepo) EnvGrants(ctx context.Context, tokenID int64) ([]model.EnvGr
 	var grants []model.EnvGrant
 	for qr.Next() {
 		var (
-			g       model.EnvGrant
-			envName gorqlite.NullString
+			g          model.EnvGrant
+			envName    gorqlite.NullString
+			updatedRaw string
 		)
-		if err := qr.Scan(&g.SecretID, &g.SecretName, &envName, &g.Permission); err != nil {
+		if err := qr.Scan(&g.SecretID, &g.SecretName, &envName, &g.Permission, &updatedRaw); err != nil {
 			return nil, fmt.Errorf("storage: scan env grant for token %d: %w", tokenID, err)
 		}
+		updatedAt, err := parseTimestamp(updatedRaw)
+		if err != nil {
+			return nil, fmt.Errorf("storage: parse updated_at of secret %d: %w", g.SecretID, err)
+		}
+		g.SecretUpdatedAt = updatedAt
 		g.EnvName = envName.String
 		if g.EnvName == "" {
 			g.EnvName = envname.Derive(g.SecretName)

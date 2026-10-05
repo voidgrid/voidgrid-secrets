@@ -5,17 +5,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/runenv"
 )
-
-// defaultTokenFile is where a compose `secrets:` entry named
-// voidgrid-token is mounted.
-const defaultTokenFile = "/run/secrets/voidgrid-token" //nolint:gosec // a file path, not a credential
 
 // stripFromChild are this command's own settings: they're removed from the
 // environment the wrapped command sees, so the token doesn't leak into it.
@@ -26,7 +20,7 @@ var stripFromChild = []string{"VOIDGRID_TOKEN", "VOIDGRID_TOKEN_FILE", "VOIDGRID
 func runInject(args []string) error {
 	fset := flag.NewFlagSet("run", flag.ContinueOnError)
 	url := fset.String("url", os.Getenv("VOIDGRID_URL"), "voidgrid-secrets server URL (default $VOIDGRID_URL)")
-	tokenFile := fset.String("token-file", "", "file holding the machine token (default $VOIDGRID_TOKEN_FILE, then "+defaultTokenFile+", then $VOIDGRID_TOKEN)")
+	tokenFile := fset.String("token-file", "", "file holding the machine token (default $VOIDGRID_TOKEN_FILE, then "+runenv.DefaultTokenFile+", then $VOIDGRID_TOKEN)")
 	filesDir := fset.String("files", "", "write each secret to a file in this in-memory (tmpfs) directory and set NAME_FILE instead of NAME")
 	timeout := fset.Duration("timeout", 30*time.Second, "how long to keep retrying while the server is unreachable or starting")
 	fset.Usage = func() {
@@ -49,9 +43,9 @@ func runInject(args []string) error {
 			return fmt.Errorf("run: %w", err)
 		}
 	}
-	token, err := loadToken(*tokenFile)
+	token, err := runenv.LoadToken(*tokenFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("run: %w", err)
 	}
 
 	secrets, err := runenv.Fetch(context.Background(), runenv.FetchOptions{
@@ -83,34 +77,4 @@ func runInject(args []string) error {
 		return fmt.Errorf("run: %w", err)
 	}
 	return nil
-}
-
-// loadToken reads the machine token from an explicit file, else the
-// default compose-secret path, else $VOIDGRID_TOKEN.
-func loadToken(flagPath string) (string, error) {
-	path := flagPath
-	if path == "" {
-		path = os.Getenv("VOIDGRID_TOKEN_FILE")
-	}
-	explicit := path != ""
-	if !explicit {
-		path = defaultTokenFile
-	}
-
-	data, err := os.ReadFile(path) //nolint:gosec // reading the operator-configured token file is the point
-	switch {
-	case err == nil:
-		token := strings.TrimSpace(string(data))
-		if token == "" {
-			return "", fmt.Errorf("run: token file %s is empty", path)
-		}
-		return token, nil
-	case errors.Is(err, fs.ErrNotExist) && !explicit:
-		if token := strings.TrimSpace(os.Getenv("VOIDGRID_TOKEN")); token != "" {
-			return token, nil
-		}
-		return "", fmt.Errorf("run: no machine token - mount one at %s, or set --token-file, VOIDGRID_TOKEN_FILE, or VOIDGRID_TOKEN", defaultTokenFile)
-	default:
-		return "", fmt.Errorf("run: read token file %s: %w", path, err)
-	}
 }

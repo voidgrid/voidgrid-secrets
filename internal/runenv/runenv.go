@@ -65,15 +65,14 @@ func Fetch(ctx context.Context, o FetchOptions) ([]Secret, error) {
 	if logw == nil {
 		logw = io.Discard
 	}
-	endpoint := strings.TrimRight(o.URL, "/") + "/api/v1/env"
 	deadline := time.Now().Add(o.Timeout)
 
 	for attempt := 1; ; attempt++ {
-		secrets, retryable, err := fetchOnce(ctx, client, endpoint, o.Token)
+		res, err := FetchOnce(ctx, client, o.URL, o.Token, "")
 		if err == nil {
-			return secrets, nil
+			return res.Secrets, nil
 		}
-		if !retryable || time.Now().Add(delay).After(deadline) {
+		if !Retryable(err) || time.Now().Add(delay).After(deadline) {
 			return nil, err
 		}
 		if attempt == 1 {
@@ -87,32 +86,76 @@ func Fetch(ctx context.Context, o FetchOptions) ([]Secret, error) {
 	}
 }
 
-func fetchOnce(ctx context.Context, client *http.Client, endpoint, token string) (secrets []Secret, retryable bool, err error) {
+// FetchResult is one GET /api/v1/env response.
+type FetchResult struct {
+	Secrets []Secret
+	// ETag identifies this set of values; send it back as FetchOnce's etag
+	// to get NotModified while nothing has changed.
+	ETag        string
+	NotModified bool
+}
+
+// StatusError is a non-2xx, non-304 response from the server. Detail is
+// the server's error message, which never contains secret values.
+type StatusError struct {
+	Code   int
+	Detail string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("server returned %d: %s", e.Code, e.Detail)
+}
+
+// Retryable reports whether err from FetchOnce is worth retrying: the
+// server was unreachable or answered 5xx (e.g. still starting, or setup not
+// yet complete). Any 4xx (bad or revoked token, misconfigured grants) is
+// not.
+func Retryable(err error) bool {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.Code >= 500
+	}
+	return errors.Is(err, ErrUnreachable)
+}
+
+// ErrUnreachable wraps a failure to get any response from the server.
+var ErrUnreachable = errors.New("server unreachable")
+
+// FetchOnce makes a single GET /api/v1/env request against the server at
+// baseURL. A non-empty etag is sent as If-None-Match; if nothing changed
+// the result has NotModified set and no secrets.
+func FetchOnce(ctx context.Context, client *http.Client, baseURL, token, etag string) (FetchResult, error) {
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/v1/env"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("build request: %w", err)
+		return FetchResult{}, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, true, fmt.Errorf("server unreachable: %w", err)
+		return FetchResult{}, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		msg := errorDetail(resp.Body)
-		err := fmt.Errorf("server returned %d: %s", resp.StatusCode, msg)
-		return nil, resp.StatusCode >= 500, err
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotModified:
+		return FetchResult{ETag: etag, NotModified: true}, nil
+	default:
+		return FetchResult{}, &StatusError{Code: resp.StatusCode, Detail: errorDetail(resp.Body)}
 	}
 
 	var body struct {
 		Secrets []Secret `json:"secrets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, false, fmt.Errorf("decode response: %w", err)
+		return FetchResult{}, fmt.Errorf("decode response: %w", err)
 	}
-	return body.Secrets, false, nil
+	return FetchResult{Secrets: body.Secrets, ETag: resp.Header.Get("ETag")}, nil
 }
 
 // errorDetail extracts the "detail" field of a huma error body, which
