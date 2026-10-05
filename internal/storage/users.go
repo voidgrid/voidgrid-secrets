@@ -37,8 +37,8 @@ func NewUserRepo(db *DB, rootKey []byte) *UserRepo {
 func (r *UserRepo) CreateWithPassword(ctx context.Context, username, passwordHash string) (model.User, error) {
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query:     `INSERT INTO users (username, auth_method, password_hash) VALUES (?, 'password_totp', ?)`,
-			Arguments: []interface{}{username, passwordHash},
+			Query:     `INSERT INTO users (username, auth_method, password_hash, created_at) VALUES (?, 'password_totp', ?, ?)`,
+			Arguments: []interface{}{username, passwordHash, nowTimestamp()},
 		},
 	})
 	if err != nil {
@@ -55,8 +55,8 @@ func (r *UserRepo) CreateWithPassword(ctx context.Context, username, passwordHas
 func (r *UserRepo) CreateWithOIDC(ctx context.Context, username, subject string) (model.User, error) {
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query:     `INSERT INTO users (username, auth_method, oidc_subject) VALUES (?, 'oidc', ?)`,
-			Arguments: []interface{}{username, subject},
+			Query:     `INSERT INTO users (username, auth_method, oidc_subject, created_at) VALUES (?, 'oidc', ?, ?)`,
+			Arguments: []interface{}{username, subject, nowTimestamp()},
 		},
 	})
 	if err != nil {

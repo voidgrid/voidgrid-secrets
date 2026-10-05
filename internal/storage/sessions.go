@@ -36,8 +36,8 @@ func (r *SessionRepo) Create(ctx context.Context, userID int64, ttl time.Duratio
 
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query:     `INSERT INTO sessions (session_hash, user_id, expires_at) VALUES (?, ?, ?)`,
-			Arguments: []interface{}{hash, userID, formatTimestamp(expiresAt)},
+			Query:     `INSERT INTO sessions (session_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+			Arguments: []interface{}{hash, userID, formatTimestamp(expiresAt), nowTimestamp()},
 		},
 	})
 	if err != nil {

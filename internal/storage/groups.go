@@ -23,8 +23,8 @@ func NewGroupRepo(db *DB) *GroupRepo {
 func (r *GroupRepo) Create(ctx context.Context, name, description string) (model.Group, error) {
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query:     `INSERT INTO groups (name, description) VALUES (?, ?)`,
-			Arguments: []interface{}{name, description},
+			Query:     `INSERT INTO groups (name, description, created_at) VALUES (?, ?, ?)`,
+			Arguments: []interface{}{name, description, nowTimestamp()},
 		},
 	})
 	if err != nil {

@@ -84,15 +84,16 @@ func (r *SecretRepo) Create(ctx context.Context, ownerType model.OwnerType, owne
 		return model.Secret{}, err
 	}
 
+	now := nowTimestamp()
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
 			Query: `INSERT INTO secrets
-				(name, owner_type, owner_id, wrapped_dek, dek_nonce, ciphertext, value_nonce, key_version, created_by)
-				VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+				(name, owner_type, owner_id, wrapped_dek, dek_nonce, ciphertext, value_nonce, key_version, created_by, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
 			Arguments: []interface{}{
 				name, string(ownerType), ownerID,
 				b64enc(wrappedDEK), b64enc(dekNonce), b64enc(ciphertext), b64enc(valueNonce),
-				createdBy,
+				createdBy, now, now,
 			},
 		},
 	})

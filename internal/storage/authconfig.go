@@ -47,8 +47,8 @@ func (r *AuthConfigRepo) IsComplete(ctx context.Context) (bool, error) {
 func (r *AuthConfigRepo) CompletePasswordTOTP(ctx context.Context) error {
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query:     `INSERT INTO auth_config (id, auth_method) VALUES (1, 'password_totp')`,
-			Arguments: nil,
+			Query:     `INSERT INTO auth_config (id, auth_method, completed_at) VALUES (1, 'password_totp', ?)`,
+			Arguments: []interface{}{nowTimestamp()},
 		},
 	})
 	if err != nil {
@@ -75,9 +75,9 @@ func (r *AuthConfigRepo) CompleteOIDC(ctx context.Context, issuer, clientID, cli
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
 			Query: `INSERT INTO auth_config
-				(id, auth_method, oidc_issuer, oidc_client_id, oidc_client_secret_enc, oidc_client_secret_nonce, oidc_redirect_uri)
-				VALUES (1, 'oidc', ?, ?, ?, ?, ?)`,
-			Arguments: []interface{}{issuer, clientID, b64enc(ciphertext), b64enc(nonce), redirectURI},
+				(id, auth_method, oidc_issuer, oidc_client_id, oidc_client_secret_enc, oidc_client_secret_nonce, oidc_redirect_uri, completed_at)
+				VALUES (1, 'oidc', ?, ?, ?, ?, ?, ?)`,
+			Arguments: []interface{}{issuer, clientID, b64enc(ciphertext), b64enc(nonce), redirectURI, nowTimestamp()},
 		},
 	})
 	if err != nil {

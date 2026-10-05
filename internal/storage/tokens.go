@@ -56,8 +56,8 @@ func (r *TokenRepo) Create(ctx context.Context, description string, createdBy in
 
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query:     `INSERT INTO machine_tokens (token_hash, description, created_by, expires_at) VALUES (?, ?, ?, ?)`,
-			Arguments: []interface{}{hash, description, createdBy, expiresArg},
+			Query:     `INSERT INTO machine_tokens (token_hash, description, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`,
+			Arguments: []interface{}{hash, description, createdBy, expiresArg, nowTimestamp()},
 		},
 	})
 	if err != nil {

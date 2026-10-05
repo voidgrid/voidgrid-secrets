@@ -25,9 +25,9 @@ func NewAuditRepo(db *DB) *AuditRepo {
 func (r *AuditRepo) Log(ctx context.Context, actorType string, actorID int64, action, resourceType string, resourceID int64) error {
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query: `INSERT INTO audit_log (actor_type, actor_id, action, resource_type, resource_id)
-				VALUES (?, ?, ?, ?, ?)`,
-			Arguments: []interface{}{actorType, actorID, action, resourceType, resourceID},
+			Query: `INSERT INTO audit_log (actor_type, actor_id, action, resource_type, resource_id, created_at)
+				VALUES (?, ?, ?, ?, ?, ?)`,
+			Arguments: []interface{}{actorType, actorID, action, resourceType, resourceID, nowTimestamp()},
 		},
 	})
 	if err != nil {

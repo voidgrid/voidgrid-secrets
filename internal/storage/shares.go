@@ -24,10 +24,10 @@ func NewShareRepo(db *DB) *ShareRepo {
 func (r *ShareRepo) Create(ctx context.Context, secretID int64, granteeType model.OwnerType, granteeID int64, permission string, grantedBy int64) error {
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query: `INSERT INTO secret_shares (secret_id, grantee_type, grantee_id, permission, granted_by)
-				VALUES (?, ?, ?, ?, ?)
+			Query: `INSERT INTO secret_shares (secret_id, grantee_type, grantee_id, permission, granted_by, granted_at)
+				VALUES (?, ?, ?, ?, ?, ?)
 				ON CONFLICT (secret_id, grantee_type, grantee_id) DO UPDATE SET permission = excluded.permission`,
-			Arguments: []interface{}{secretID, string(granteeType), granteeID, permission, grantedBy},
+			Arguments: []interface{}{secretID, string(granteeType), granteeID, permission, grantedBy, nowTimestamp()},
 		},
 	})
 	if err != nil {

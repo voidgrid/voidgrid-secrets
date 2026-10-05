@@ -55,7 +55,7 @@ func (db *DB) Migrate(ctx context.Context) error {
 		}
 
 		if _, err := db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
-			{Query: "INSERT INTO schema_migrations (version) VALUES (?)", Arguments: []interface{}{name}},
+			{Query: "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)", Arguments: []interface{}{name, nowTimestamp()}},
 		}); err != nil {
 			return fmt.Errorf("storage: record migration %s: %w", name, err)
 		}

@@ -35,8 +35,8 @@ func (r *RecoveryCodeRepo) ReplaceForUser(ctx context.Context, userID int64, has
 	}
 	for _, h := range hashedCodes {
 		stmts = append(stmts, gorqlite.ParameterizedStatement{
-			Query:     `INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)`,
-			Arguments: []interface{}{userID, h},
+			Query:     `INSERT INTO recovery_codes (user_id, code_hash, created_at) VALUES (?, ?, ?)`,
+			Arguments: []interface{}{userID, h, nowTimestamp()},
 		})
 	}
 
