@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	oidcclient "github.com/voidgrid/voidgrid-secrets/internal/auth/oidc"
@@ -96,8 +97,12 @@ func (h *AuthHandler) SubmitLogin(w http.ResponseWriter, r *http.Request) {
 
 	token, expiresAt, err := h.login.Login(r.Context(), username, password, code)
 	if err != nil {
-		render(w, http.StatusUnauthorized, "login", loginPage{
-			basePage:   basePage{Error: "invalid username, password, or TOTP code"},
+		status, msg := http.StatusUnauthorized, "invalid username, password, or TOTP code"
+		if errors.Is(err, session.ErrTooManyAttempts) {
+			status, msg = http.StatusTooManyRequests, tooManyAttemptsMessage
+		}
+		render(w, status, "login", loginPage{
+			basePage:   basePage{Error: msg},
 			Username:   username,
 			AuthMethod: model.AuthPasswordTOTP,
 		})
@@ -191,6 +196,8 @@ func (h *AuthHandler) onOIDCProvisioned(w http.ResponseWriter, r *http.Request, 
 // identity provider as cross-site, so a plain redirect would arrive at
 // /secrets without the cookie it just set. A refresh initiated by this
 // page is a same-site navigation, so the cookie goes along.
+const tooManyAttemptsMessage = "too many failed sign-in attempts for this account - try again in 15 minutes"
+
 func continueSignIn(w http.ResponseWriter) {
 	render(w, http.StatusOK, "signin_continue", basePage{RefreshTo: "/secrets"})
 }
@@ -222,8 +229,12 @@ func (h *AuthHandler) SubmitRecoveryLogin(w http.ResponseWriter, r *http.Request
 
 	token, expiresAt, err := h.login.LoginWithRecoveryCode(r.Context(), username, code)
 	if err != nil {
-		render(w, http.StatusUnauthorized, "login_recovery", recoveryLoginPage{
-			basePage: basePage{Error: "invalid username or recovery code"},
+		status, msg := http.StatusUnauthorized, "invalid username or recovery code"
+		if errors.Is(err, session.ErrTooManyAttempts) {
+			status, msg = http.StatusTooManyRequests, tooManyAttemptsMessage
+		}
+		render(w, status, "login_recovery", recoveryLoginPage{
+			basePage: basePage{Error: msg},
 			Username: username,
 		})
 		return

@@ -28,6 +28,18 @@ const (
 // in sync with this value).
 const MinPasswordLength = 14
 
+// argonSlots bounds how many Argon2id computations run at once. Each one
+// allocates argonMemory (64 MiB), and login is reachable without
+// authentication, so without a cap a burst of parallel login attempts
+// could exhaust the host's memory. Excess attempts wait their turn.
+var argonSlots = make(chan struct{}, 4)
+
+func argonKey(password, salt []byte, timeCost, memory uint32, threads uint8, keyLen uint32) []byte {
+	argonSlots <- struct{}{}
+	defer func() { <-argonSlots }()
+	return argon2.IDKey(password, salt, timeCost, memory, threads, keyLen)
+}
+
 // HashPassword returns an encoded Argon2id hash of password, in the form
 // "$argon2id$v=19$m=65536,t=3,p=1$<salt>$<hash>" (base64, unpadded).
 func HashPassword(password string) (string, error) {
@@ -36,7 +48,7 @@ func HashPassword(password string) (string, error) {
 		return "", fmt.Errorf("crypto: generate salt: %w", err)
 	}
 
-	hash := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	hash := argonKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 
 	encoded := fmt.Sprintf(
 		"$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
@@ -83,7 +95,7 @@ func VerifyPassword(password, encodedHash string) (bool, error) {
 		return false, fmt.Errorf("crypto: implausible password hash digest length %d", len(wantHash))
 	}
 
-	gotHash := argon2.IDKey([]byte(password), salt, timeCost, memory, threads, uint32(len(wantHash))) //nolint:gosec // bounds-checked above
+	gotHash := argonKey([]byte(password), salt, timeCost, memory, threads, uint32(len(wantHash))) //nolint:gosec // bounds-checked above
 
 	return subtle.ConstantTimeCompare(gotHash, wantHash) == 1, nil
 }

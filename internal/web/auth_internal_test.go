@@ -50,3 +50,37 @@ func TestSecurityHeadersAreSet(t *testing.T) {
 		}
 	}
 }
+
+func TestCrossOriginProtectionRefusesSameSiteForms(t *testing.T) {
+	h := crossOriginProtection(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	cases := []struct {
+		name   string
+		method string
+		header map[string]string
+		want   int
+	}{
+		// A sibling subdomain is the same *site*, so SameSite=Strict
+		// still sends the cookie; this is what has to be refused.
+		{"same-site POST", http.MethodPost, map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden},
+		{"cross-site POST", http.MethodPost, map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"other Origin, no Sec-Fetch-Site", http.MethodPost, map[string]string{"Origin": "https://other.example.com"}, http.StatusForbidden},
+		{"same-origin POST", http.MethodPost, map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusOK},
+		{"matching Origin", http.MethodPost, map[string]string{"Origin": "https://secrets.example.com"}, http.StatusOK},
+		{"non-browser POST (no headers)", http.MethodPost, nil, http.StatusOK},
+		{"cross-site GET", http.MethodGet, map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusOK},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(c.method, "https://secrets.example.com/admin/tokens/1/revoke", nil)
+		for k, v := range c.header {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("%s: status = %d, want %d", c.name, rec.Code, c.want)
+		}
+	}
+}

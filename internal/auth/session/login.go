@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
@@ -15,6 +16,11 @@ import (
 // login endpoint must never reveal which specific check failed, or it
 // becomes a username/enrollment oracle.
 var ErrInvalidCredentials = errors.New("session: invalid username, password, or TOTP code")
+
+// ErrTooManyAttempts is returned instead of checking credentials at all
+// once a username has had too many failed logins recently (see
+// AttemptLimiter).
+var ErrTooManyAttempts = errors.New("session: too many failed login attempts for this account, try again later")
 
 // DefaultTTL is the default session lifetime.
 const DefaultTTL = 24 * time.Hour
@@ -51,28 +57,65 @@ type LoginService struct {
 	VerifyPassword func(password, hash string) (bool, error)
 	ValidateTOTP   func(code, secret string) bool
 	TTL            time.Duration
+	// Limiter throttles repeated failures per username, across both login
+	// flows. nil means no limit.
+	Limiter *AttemptLimiter
+}
+
+var (
+	dummyHashOnce sync.Once
+	dummyHash     string
+)
+
+// dummyPasswordHash is verified against when the username doesn't exist
+// (or can't use password login), so those attempts take as long as a real
+// one and response timing doesn't reveal which usernames exist.
+func dummyPasswordHash() string {
+	dummyHashOnce.Do(func() {
+		dummyHash, _ = crypto.HashPassword("voidgrid-secrets dummy password, never matches")
+	})
+	return dummyHash
+}
+
+// limited runs a login attempt for username through s.Limiter: refused
+// outright while the username is locked out, counted as a failure on
+// ErrInvalidCredentials, and clearing the count on success.
+func (s *LoginService) limited(username string, attempt func() (string, time.Time, error)) (string, time.Time, error) {
+	if !s.Limiter.Allow(username) {
+		return "", time.Time{}, ErrTooManyAttempts
+	}
+	plaintext, expiresAt, err := attempt()
+	switch {
+	case err == nil:
+		s.Limiter.Succeed(username)
+	case errors.Is(err, ErrInvalidCredentials):
+		s.Limiter.Fail(username)
+	}
+	return plaintext, expiresAt, err
 }
 
 // Login authenticates username/password/totpCode and, on success, returns
 // a new session token and its expiry.
 func (s *LoginService) Login(ctx context.Context, username, password, totpCode string) (plaintext string, expiresAt time.Time, err error) {
+	return s.limited(username, func() (string, time.Time, error) {
+		return s.login(ctx, username, password, totpCode)
+	})
+}
+
+func (s *LoginService) login(ctx context.Context, username, password, totpCode string) (plaintext string, expiresAt time.Time, err error) {
 	rec, err := s.Users.GetAuthRecord(ctx, username)
-	if err != nil {
-		return "", time.Time{}, ErrInvalidCredentials
-	}
-	if rec.Disabled {
-		return "", time.Time{}, ErrInvalidCredentials
-	}
-	if rec.AuthMethod != model.AuthPasswordTOTP {
-		// OIDC-only users (or any other method) can't use this flow.
-		return "", time.Time{}, ErrInvalidCredentials
-	}
-	if rec.PasswordHash == "" {
-		return "", time.Time{}, ErrInvalidCredentials
+	// OIDC-only users (or any other method), disabled accounts and users
+	// without a password can't use this flow - but the password is still
+	// checked, against a dummy hash, so they take as long to reject as a
+	// wrong password does.
+	eligible := err == nil && !rec.Disabled && rec.AuthMethod == model.AuthPasswordTOTP && rec.PasswordHash != ""
+	hash := rec.PasswordHash
+	if !eligible {
+		hash = dummyPasswordHash()
 	}
 
-	ok, err := s.VerifyPassword(password, rec.PasswordHash)
-	if err != nil || !ok {
+	ok, err := s.VerifyPassword(password, hash)
+	if !eligible || err != nil || !ok {
 		return "", time.Time{}, ErrInvalidCredentials
 	}
 
@@ -105,6 +148,12 @@ func (s *LoginService) Login(ctx context.Context, username, password, totpCode s
 // path shared by both, since both GetAuthRecord lookups and the codes
 // themselves are keyed by user, not by auth method.
 func (s *LoginService) LoginWithRecoveryCode(ctx context.Context, username, code string) (plaintext string, expiresAt time.Time, err error) {
+	return s.limited(username, func() (string, time.Time, error) {
+		return s.loginWithRecoveryCode(ctx, username, code)
+	})
+}
+
+func (s *LoginService) loginWithRecoveryCode(ctx context.Context, username, code string) (plaintext string, expiresAt time.Time, err error) {
 	rec, err := s.Users.GetAuthRecord(ctx, username)
 	if err != nil {
 		return "", time.Time{}, ErrInvalidCredentials

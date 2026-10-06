@@ -252,3 +252,47 @@ func TestAPIOpenAPISpecIsServed(t *testing.T) {
 		t.Fatalf("expected OpenAPI spec to mention the API title, body: %s", rec.Body.String())
 	}
 }
+
+func TestAPIRefusesCrossOriginSessionRequests(t *testing.T) {
+	e := newEnv(t, true)
+	ctx := context.Background()
+
+	admin, err := e.users.CreateWithPassword(ctx, "coop-admin", "x")
+	if err != nil {
+		t.Fatalf("CreateWithPassword: %v", err)
+	}
+	if err := e.users.PromoteToAdmin(ctx, admin.ID); err != nil {
+		t.Fatalf("PromoteToAdmin: %v", err)
+	}
+	sessionToken, _, err := e.sessions.Create(ctx, admin.ID, gosession.DefaultTTL)
+	if err != nil {
+		t.Fatalf("sessions.Create: %v", err)
+	}
+	_, mt, err := e.tokens.Create(ctx, "victim", admin.ID, nil)
+	if err != nil {
+		t.Fatalf("tokens.Create: %v", err)
+	}
+
+	revoke := func(fetchSite string) int {
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/admin/tokens/%d/revoke", mt.ID), nil)
+		req.AddCookie(&http.Cookie{Name: gosession.CookieName, Value: sessionToken}) //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
+		req.Header.Set("Sec-Fetch-Site", fetchSite)
+		rec := httptest.NewRecorder()
+		e.handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := revoke("same-site"); code != http.StatusForbidden {
+		t.Fatalf("same-site revoke: status = %d, want 403", code)
+	}
+	tokens, err := e.tokens.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tokens) != 1 || tokens[0].RevokedAt != nil {
+		t.Fatal("token was revoked by a refused cross-origin request")
+	}
+	if code := revoke("same-origin"); code >= 300 {
+		t.Fatalf("same-origin revoke: status = %d, want success", code)
+	}
+}

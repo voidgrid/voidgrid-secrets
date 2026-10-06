@@ -71,6 +71,45 @@ func Decrypt(dek, ciphertext, nonce []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
+// WrapDEKWithAD is WrapDEK, additionally binding the wrapped key to ad:
+// UnwrapDEKWithAD only succeeds with the same ad. Binding a secret's key to
+// the secret's identity means a wrapped key copied onto another row can't
+// be unwrapped there.
+func WrapDEKWithAD(rootKey, dek, ad []byte) (wrapped, nonce []byte, err error) {
+	wrapped, nonce, err = seal(rootKey, dek, ad)
+	if err != nil {
+		return nil, nil, fmt.Errorf("crypto: wrap DEK: %w", err)
+	}
+	return wrapped, nonce, nil
+}
+
+// UnwrapDEKWithAD unwraps a key wrapped by WrapDEKWithAD with the same ad.
+func UnwrapDEKWithAD(rootKey, wrapped, nonce, ad []byte) ([]byte, error) {
+	dek, err := open(rootKey, wrapped, nonce, ad)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: unwrap DEK: %w", err)
+	}
+	return dek, nil
+}
+
+// EncryptWithAD is Encrypt, additionally binding the ciphertext to ad.
+func EncryptWithAD(dek, plaintext, ad []byte) (ciphertext, nonce []byte, err error) {
+	ciphertext, nonce, err = seal(dek, plaintext, ad)
+	if err != nil {
+		return nil, nil, fmt.Errorf("crypto: encrypt: %w", err)
+	}
+	return ciphertext, nonce, nil
+}
+
+// DecryptWithAD decrypts ciphertext from EncryptWithAD with the same ad.
+func DecryptWithAD(dek, ciphertext, nonce, ad []byte) ([]byte, error) {
+	plaintext, err := open(dek, ciphertext, nonce, ad)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: decrypt: %w", err)
+	}
+	return plaintext, nil
+}
+
 // seal encrypts plaintext under key with a freshly generated random nonce,
 // optionally authenticating (but not encrypting) additionalData.
 func seal(key, plaintext, additionalData []byte) (ciphertext, nonce []byte, err error) {

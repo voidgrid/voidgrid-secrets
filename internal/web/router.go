@@ -87,7 +87,23 @@ func NewRouter(deps Deps) http.Handler {
 		})
 	})
 
-	return r
+	return crossOriginProtection(r)
+}
+
+// crossOriginProtection rejects state-changing requests (anything but
+// GET/HEAD/OPTIONS) that a browser marks as coming from another origin,
+// using Sec-Fetch-Site, falling back to comparing Origin with Host.
+// SameSite=Strict on the session cookie isn't enough on its own: a sibling
+// subdomain (other.example.com) is the same *site*, so its pages could
+// otherwise submit forms with a logged-in admin's cookie. Requests with
+// neither header (curl, `voidgrid-secrets run`) are not browser requests
+// and pass through.
+func crossOriginProtection(h http.Handler) http.Handler {
+	cop := http.NewCrossOriginProtection()
+	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+	}))
+	return cop.Handler(h)
 }
 
 // webCSP allows only this origin's own assets. img-src also allows data:

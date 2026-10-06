@@ -76,3 +76,32 @@ codes are used up or lost.
 Web sessions last 24 hours and use a `Secure`, `HttpOnly`,
 `SameSite=Strict` cookie, which is why the UI needs HTTPS. Logging out
 ends the session on the server.
+
+Form submissions and API calls made with a session cookie are refused
+(403) when the browser marks them as coming from another origin - including
+another subdomain of the same domain, which `SameSite=Strict` alone would
+let through. Scripts and machine tokens, which send no such headers, are
+unaffected.
+
+## Failed sign-ins
+
+After 10 failed sign-ins for one username within 15 minutes, further
+password and recovery-code sign-ins for that username are refused (429)
+until the 15 minutes are up, even with the right credentials. Sessions
+already open and OIDC sign-in aren't affected. Anyone who knows a username
+can trigger this on purpose, so an account can be kept locked out of
+password sign-in that way.
+
+## Admins can read every secret
+
+Admins don't see other users' secrets in their own secrets list, and the
+web UI won't reveal them. But an admin manages machine tokens, and can
+grant a token read on **any** secret by its id - including another user's
+private secret - then read it through that token. The token's page also
+shows the names of the secrets it's granted.
+
+Treat admin as full access to everything stored here, and only make
+someone an admin if you'd trust them with every secret. Values a token
+reads through `GET /api/v1/env` (`voidgrid-secrets run` and the agent) are
+recorded in the audit log under that token; reads through the
+single-secret endpoint `GET /api/v1/secrets/{id}` currently aren't.

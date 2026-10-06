@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -41,6 +42,13 @@ func runServer(cfg config.Config) error {
 	}
 
 	secretRepo := storage.NewSecretRepo(db, rootKey)
+	upgraded, err := secretRepo.UpgradeEncryption(context.Background())
+	if err != nil {
+		return fmt.Errorf("upgrade secret encryption: %w", err)
+	}
+	if upgraded > 0 {
+		log.Printf("storage: re-encrypted %d secret(s) to bind each to its id", upgraded)
+	}
 	shareRepo := storage.NewShareRepo(db)
 	tokenRepo := storage.NewTokenRepo(db)
 	userRepo := storage.NewUserRepo(db, rootKey)
@@ -68,6 +76,9 @@ func runServer(cfg config.Config) error {
 		RecoveryCodes:  recoveryCodeRepo,
 		VerifyPassword: crypto.VerifyPassword,
 		ValidateTOTP:   totp.Validate,
+		// 10 failures in 15 minutes locks a username out of password and
+		// recovery-code login until the 15 minutes are up.
+		Limiter: session.NewAttemptLimiter(10, 15*time.Minute),
 	}
 
 	apiHandler := api.NewRouter(api.Deps{
@@ -107,7 +118,18 @@ func runServer(cfg config.Config) error {
 	root.Handle("/*", webHandler)
 
 	fmt.Printf("voidgrid-secrets listening on %s\n", cfg.ListenAddr)
-	return http.ListenAndServe(cfg.ListenAddr, root) //nolint:gosec // homelab tool behind a reverse proxy; no read/write timeout hardening needed yet
+	srv := &http.Server{
+		Addr:    cfg.ListenAddr,
+		Handler: root,
+		// Bound how long a client can hold a connection without finishing
+		// a request (slowloris). Every request here is small and quick.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
+	return srv.ListenAndServe()
 }
 
 // loadOIDCProvider builds the deployment's OIDC client at startup, if

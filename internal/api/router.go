@@ -81,7 +81,16 @@ func NewRouter(deps Deps) http.Handler {
 	RegisterGroups(admin, deps.GroupsHandler)
 	RegisterTokens(admin, deps.TokensHandler)
 
-	return router
+	// Same protection as the web UI (see web.crossOriginProtection): the
+	// session-cookie routes would otherwise accept bodiless POSTs (token
+	// revoke, logout) from a same-site page.
+	cop := http.NewCrossOriginProtection()
+	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"title":"Forbidden","status":403,"detail":"cross-origin request refused"}`))
+	}))
+	return cop.Handler(router)
 }
 
 // noStore marks every API response uncacheable (responses carry secret

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -65,6 +66,9 @@ type LoginOutput struct {
 func (h *AuthHandler) Login(ctx context.Context, in *LoginInput) (*LoginOutput, error) {
 	token, expiresAt, err := h.login.Login(ctx, in.Body.Username, in.Body.Password, in.Body.TOTPCode)
 	if err != nil {
+		if errors.Is(err, session.ErrTooManyAttempts) {
+			return nil, huma.Error429TooManyRequests("too many failed login attempts for this account, try again later")
+		}
 		return nil, huma.Error401Unauthorized("invalid username, password, or TOTP code")
 	}
 
