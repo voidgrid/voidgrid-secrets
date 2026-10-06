@@ -1,8 +1,11 @@
 package web
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
@@ -11,11 +14,12 @@ import (
 // GroupsHandler implements the admin group-management pages.
 type GroupsHandler struct {
 	groups *storage.GroupRepo
+	audit  audit.Logger
 }
 
 // NewGroupsHandler returns a GroupsHandler backed by groups.
-func NewGroupsHandler(groups *storage.GroupRepo) *GroupsHandler {
-	return &GroupsHandler{groups: groups}
+func NewGroupsHandler(groups *storage.GroupRepo, auditLog audit.Logger) *GroupsHandler {
+	return &GroupsHandler{groups: groups, audit: auditLog}
 }
 
 type groupsPage struct {
@@ -40,10 +44,15 @@ func (h *GroupsHandler) SubmitCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	if _, err := h.groups.Create(r.Context(), r.FormValue("name"), r.FormValue("description")); err != nil {
+	g, err := h.groups.Create(r.Context(), r.FormValue("name"), r.FormValue("description"))
+	if err != nil {
 		http.Error(w, "could not create group (name may already be taken)", http.StatusBadRequest)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: currentActor(r), Action: audit.GroupCreate, ResourceType: "group", ResourceID: g.ID,
+		Details: map[string]string{"name": g.Name},
+	})
 	http.Redirect(w, r, "/admin/groups", http.StatusSeeOther)
 }
 
@@ -100,9 +109,17 @@ func (h *GroupsHandler) SubmitAddMember(w http.ResponseWriter, r *http.Request) 
 	role := model.GroupRole(r.FormValue("role"))
 
 	if err := h.groups.AddMember(r.Context(), id, memberID, role); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			http.Error(w, "no such user", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: currentActor(r), Action: audit.GroupMemberAdd, ResourceType: "group", ResourceID: id,
+		Details: map[string]string{"user_id": strconv.FormatInt(memberID, 10), "role": string(role)},
+	})
 	redirectToGroup(w, r, id)
 }
 
@@ -122,5 +139,9 @@ func (h *GroupsHandler) SubmitRemoveMember(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: currentActor(r), Action: audit.GroupMemberRemove, ResourceType: "group", ResourceID: id,
+		Details: map[string]string{"user_id": strconv.FormatInt(userID, 10)},
+	})
 	redirectToGroup(w, r, id)
 }

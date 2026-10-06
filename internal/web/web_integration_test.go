@@ -34,6 +34,8 @@ type env struct {
 	authConfig *storage.AuthConfigRepo
 }
 
+const testSetupToken = "vgs_setup_test" //nolint:gosec // fake test fixture, not a real credential
+
 func newEnv(t *testing.T) env {
 	t.Helper()
 
@@ -47,6 +49,7 @@ func newEnv(t *testing.T) env {
 	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 
 	cmd := exec.Command("rqlited", //nolint:gosec // fixed binary name + test-generated args
+		"-fk",
 		"-http-addr", httpAddr,
 		"-raft-addr", fmt.Sprintf("127.0.0.1:%d", raftPort),
 		dataDir,
@@ -84,6 +87,8 @@ func newEnv(t *testing.T) env {
 	oidcProvider := &oidcclient.Provider{}
 
 	wizard := &setup.Wizard{
+		Audit:                 auditRepo,
+		SetupToken:            testSetupToken,
 		Users:                 userRepo,
 		AuthConfig:            authConfigRepo,
 		RecoveryCodes:         recoveryCodeRepo,
@@ -94,6 +99,7 @@ func newEnv(t *testing.T) env {
 		HashRecoveryCode:      crypto.HashToken,
 	}
 	loginService := &gosession.LoginService{
+		Audit:          auditRepo,
 		Users:          userRepo,
 		Sessions:       sessionRepo,
 		RecoveryCodes:  recoveryCodeRepo,
@@ -105,11 +111,12 @@ func newEnv(t *testing.T) env {
 		SetupChecker: authConfigRepo,
 		SessionAuth:  sessionRepo,
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
-		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, recoveryCodeRepo),
+		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, recoveryCodeRepo, auditRepo),
 		Secrets:      web.NewSecretsHandler(secretRepo, shareRepo, auditRepo),
-		Users:        web.NewUsersHandler(userRepo),
-		Groups:       web.NewGroupsHandler(groupRepo),
-		Tokens:       web.NewTokensHandler(tokenRepo),
+		Users:        web.NewUsersHandler(userRepo, auditRepo),
+		Groups:       web.NewGroupsHandler(groupRepo, auditRepo),
+		Tokens:       web.NewTokensHandler(tokenRepo, auditRepo),
+		Audit:        web.NewAuditHandler(auditRepo),
 	})
 
 	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo}
@@ -177,8 +184,9 @@ func TestWebFullSetupLoginSecretFlow(t *testing.T) {
 	e := newEnv(t)
 
 	initRec := doForm(t, e.handler, "/setup", url.Values{
-		"username": {"admin"},
-		"password": {"correct horse battery staple"},
+		"setup_token": {testSetupToken},
+		"username":    {"admin"},
+		"password":    {"correct horse battery staple"},
 	}, nil)
 	if initRec.Code != http.StatusOK {
 		t.Fatalf("setup init status = %d, body=%s", initRec.Code, initRec.Body.String())
@@ -192,8 +200,9 @@ func TestWebFullSetupLoginSecretFlow(t *testing.T) {
 	}
 
 	confirmRec := doForm(t, e.handler, "/setup/confirm", url.Values{
-		"username": {"admin"},
-		"code":     {code},
+		"setup_token": {testSetupToken},
+		"username":    {"admin"},
+		"code":        {code},
 	}, nil)
 	if confirmRec.Code != http.StatusOK {
 		t.Fatalf("confirm status=%d, body=%s", confirmRec.Code, confirmRec.Body.String())
@@ -270,8 +279,9 @@ func TestWebLoginRejectsReplayedTOTPCode(t *testing.T) {
 	e := newEnv(t)
 
 	initRec := doForm(t, e.handler, "/setup", url.Values{
-		"username": {"admin"},
-		"password": {"correct horse battery staple"},
+		"setup_token": {testSetupToken},
+		"username":    {"admin"},
+		"password":    {"correct horse battery staple"},
 	}, nil)
 	secret := extractBetween(t, initRec.Body.String(), "<code>", "</code>")
 
@@ -281,8 +291,9 @@ func TestWebLoginRejectsReplayedTOTPCode(t *testing.T) {
 	}
 
 	doForm(t, e.handler, "/setup/confirm", url.Values{
-		"username": {"admin"},
-		"code":     {code},
+		"setup_token": {testSetupToken},
+		"username":    {"admin"},
+		"code":        {code},
 	}, nil)
 
 	firstLogin := doForm(t, e.handler, "/login", url.Values{

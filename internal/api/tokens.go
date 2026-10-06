@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
@@ -18,11 +19,12 @@ import (
 // session + admin only.
 type TokensHandler struct {
 	tokens *storage.TokenRepo
+	audit  audit.Logger
 }
 
 // NewTokensHandler returns a TokensHandler backed by tokens.
-func NewTokensHandler(tokens *storage.TokenRepo) *TokensHandler {
-	return &TokensHandler{tokens: tokens}
+func NewTokensHandler(tokens *storage.TokenRepo, auditLog audit.Logger) *TokensHandler {
+	return &TokensHandler{tokens: tokens, audit: auditLog}
 }
 
 // RegisterTokens registers the admin token-management operations on api.
@@ -133,6 +135,11 @@ func (h *TokensHandler) Create(ctx context.Context, in *CreateTokenInput) (*Crea
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
 
+	details := map[string]string{"description": mt.Description}
+	if mt.ExpiresAt != nil {
+		details["expires_at"] = mt.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	audit.Record(ctx, h.audit, audit.Event{Actor: actorFrom(ctx), Action: audit.TokenCreate, ResourceType: "token", ResourceID: mt.ID, Details: details})
 	out := &CreateTokenOutput{}
 	out.Body.Token = plaintext
 	out.Body.Metadata = toMachineTokenOut(mt)
@@ -152,6 +159,7 @@ func (h *TokensHandler) Revoke(ctx context.Context, in *TokenIDInput) (*RevokeTo
 	if err := h.tokens.Revoke(ctx, in.ID); err != nil {
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
+	audit.Record(ctx, h.audit, audit.Event{Actor: actorFrom(ctx), Action: audit.TokenRevoke, ResourceType: "token", ResourceID: in.ID})
 	return &RevokeTokenOutput{}, nil
 }
 
@@ -179,8 +187,17 @@ func (h *TokensHandler) AddACL(ctx context.Context, in *AddTokenACLInput) (*AddT
 			return nil, huma.Error409Conflict(err.Error())
 		case errors.Is(err, storage.ErrSecretNotFound):
 			return nil, huma.Error404NotFound(err.Error())
+		case errors.Is(err, storage.ErrNotFound):
+			return nil, huma.Error404NotFound("no such token, secret or group")
 		}
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.TokenGrant, ResourceType: "token", ResourceID: in.ID,
+		Details: map[string]string{
+			"resource_type": in.Body.ResourceType, "resource_id": itoa(in.Body.ResourceID),
+			"permission": in.Body.Permission, "env_name": in.Body.EnvName,
+		},
+	})
 	return &AddTokenACLOutput{}, nil
 }

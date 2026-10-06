@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -78,7 +79,7 @@ func TestFullSetupAndLoginFlow(t *testing.T) {
 	e := newEnv(t, false)
 
 	initRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/init",
-		`{"username":"admin","password":"correct horse battery staple"}`, nil)
+		`{"setup_token":"vgs_setup_test","username":"admin","password":"correct horse battery staple"}`, nil)
 	if initRec.Code != http.StatusOK {
 		t.Fatalf("init status = %d, want %d; body=%s", initRec.Code, http.StatusOK, initRec.Body.String())
 	}
@@ -110,14 +111,14 @@ func TestFullSetupAndLoginFlow(t *testing.T) {
 	}
 
 	confirmRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/confirm",
-		fmt.Sprintf(`{"username":"admin","code":%q}`, code), nil)
+		fmt.Sprintf(`{"setup_token":"vgs_setup_test","username":"admin","code":%q}`, code), nil)
 	if confirmRec.Code != http.StatusOK && confirmRec.Code != http.StatusNoContent {
 		t.Fatalf("confirm status = %d, want 200/204; body=%s", confirmRec.Code, confirmRec.Body.String())
 	}
 
 	// Setup endpoints are now locked out in the other direction.
 	reinitRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/init",
-		`{"username":"admin2","password":"another password here"}`, nil)
+		`{"setup_token":"vgs_setup_test","username":"admin2","password":"another password here"}`, nil)
 	if reinitRec.Code != http.StatusConflict {
 		t.Fatalf("re-init status = %d, want %d", reinitRec.Code, http.StatusConflict)
 	}
@@ -157,7 +158,7 @@ func TestLoginRejectsWrongTOTPAfterSetup(t *testing.T) {
 	e := newEnv(t, false)
 
 	initRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/init",
-		`{"username":"admin","password":"correct horse battery staple"}`, nil)
+		`{"setup_token":"vgs_setup_test","username":"admin","password":"correct horse battery staple"}`, nil)
 	var initBody struct {
 		Secret string `json:"secret"`
 	}
@@ -165,7 +166,7 @@ func TestLoginRejectsWrongTOTPAfterSetup(t *testing.T) {
 
 	code, _ := totp.GenerateCode(initBody.Secret, time.Now())
 	doJSON(t, e.handler, http.MethodPost, "/api/v1/setup/password/confirm",
-		fmt.Sprintf(`{"username":"admin","code":%q}`, code), nil)
+		fmt.Sprintf(`{"setup_token":"vgs_setup_test","username":"admin","code":%q}`, code), nil)
 
 	loginRec := doJSON(t, e.handler, http.MethodPost, "/api/v1/auth/login",
 		`{"username":"admin","password":"correct horse battery staple","totp_code":"000000"}`, nil)
@@ -214,5 +215,24 @@ func TestMachineTokenCannotReachAdminRoutes(t *testing.T) {
 	// as a form of authentication there, so this is 401, not 403.
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+func TestSetupRequiresTheSetupToken(t *testing.T) {
+	e := newEnv(t, false)
+
+	for _, c := range []struct{ path, body string }{
+		{"/api/v1/setup/password/init", `{"setup_token":"wrong","username":"admin","password":"correct horse battery staple"}`},
+		{"/api/v1/setup/password/confirm", `{"setup_token":"wrong","username":"admin","code":"123456"}`},
+		// An unreachable issuer would give 400 if discovery ran first; 403
+		// shows the token is checked before the server contacts anything.
+		{"/api/v1/setup/oidc", `{"setup_token":"wrong","issuer":"http://127.0.0.1:1","client_id":"x","client_secret":"x","redirect_uri":"https://app.example/cb"}`},
+	} {
+		if rec := doJSON(t, e.handler, http.MethodPost, c.path, c.body, nil); rec.Code != http.StatusForbidden {
+			t.Errorf("%s with wrong token: status = %d, want 403; body=%s", c.path, rec.Code, rec.Body.String())
+		}
+	}
+	if n, err := e.users.CountUsers(context.Background()); err != nil || n != 0 {
+		t.Fatalf("users after refused setup = %d, %v; want 0", n, err)
 	}
 }

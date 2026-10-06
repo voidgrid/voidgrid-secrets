@@ -56,12 +56,21 @@ The app serves plain HTTP on port 8443 and has no TLS of its own. Put a
 reverse proxy (Caddy, Traefik, nginx) in front of it. Session cookies are
 marked `Secure`, so web login only works over HTTPS.
 
-## 4. Finish first-run setup before exposing it
+## 4. Finish first-run setup
 
-Until the setup wizard has been completed, **anyone who can reach the
-instance can complete it and become the admin**. Do it before the
-instance is reachable from anywhere you don't trust - see
-[authentication.md](authentication.md).
+Until setup is complete, the server prints a one-time **setup token** to
+its log at every start, and the setup wizard refuses every step without
+it - so only someone who can read the container's log can create the
+admin account or configure OIDC:
+
+```
+docker logs voidgrid-secrets 2>&1 | grep 'setup token'
+```
+
+Open `/setup`, enter the token, and follow the wizard - see
+[authentication.md](authentication.md). The token lives only in the
+running process: a restart prints a new one, and once setup is complete
+none is generated.
 
 ## Restarting
 

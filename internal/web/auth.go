@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	oidcclient "github.com/voidgrid/voidgrid-secrets/internal/auth/oidc"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/recoverycode"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
@@ -23,6 +24,8 @@ type AuthConfigGetter interface {
 type SessionStore interface {
 	session.SessionCreator
 	Revoke(ctx context.Context, plaintext string) error
+	// Authenticate identifies the session being ended, for the audit log.
+	Authenticate(ctx context.Context, plaintext string) (model.User, error)
 }
 
 // RecoveryCodeStore is the subset of recovery-code storage the login flow
@@ -43,6 +46,7 @@ type AuthHandler struct {
 	oidcProvider  *oidcclient.Provider
 	oidcUsers     oidcclient.UserProvisioner
 	recoveryCodes RecoveryCodeStore
+	audit         audit.Logger
 }
 
 // NewAuthHandler returns an AuthHandler backed by the given dependencies.
@@ -53,14 +57,16 @@ func NewAuthHandler(
 	oidcProvider *oidcclient.Provider,
 	oidcUsers oidcclient.UserProvisioner,
 	recoveryCodes RecoveryCodeStore,
+	auditLog audit.Logger,
 ) *AuthHandler {
 	return &AuthHandler{
 		login:         login,
 		sessions:      sessions,
 		authConfig:    authConfig,
 		oidcProvider:  oidcProvider,
-		oidcUsers:     oidcUsers,
+		oidcUsers:     auditedProvisioner{next: oidcUsers, audit: auditLog},
 		recoveryCodes: recoveryCodes,
+		audit:         auditLog,
 	}
 }
 
@@ -117,6 +123,9 @@ func (h *AuthHandler) SubmitLogin(w http.ResponseWriter, r *http.Request) {
 // and redirects to the login page.
 func (h *AuthHandler) SubmitLogout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(session.CookieName); err == nil && cookie.Value != "" {
+		if u, err := h.sessions.Authenticate(r.Context(), cookie.Value); err == nil {
+			audit.Record(r.Context(), h.audit, audit.Event{Actor: audit.User(u.ID), Action: audit.Logout, ResourceType: "user", ResourceID: u.ID})
+		}
 		_ = h.sessions.Revoke(r.Context(), cookie.Value)
 	}
 	session.ClearCookie(w)
@@ -162,6 +171,10 @@ func (h *AuthHandler) onOIDCProvisioned(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	session.SetCookie(w, token, expiresAt)
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: audit.User(userID), Action: audit.Login, ResourceType: "user", ResourceID: userID,
+		Details: map[string]string{"method": "oidc"},
+	})
 
 	if !created {
 		continueSignIn(w)

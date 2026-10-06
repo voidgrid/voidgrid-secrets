@@ -16,7 +16,7 @@ trap cleanup EXIT INT TERM
 
 go build -o "$ROOT_DIR/bin/voidgrid-secrets" "$ROOT_DIR/cmd/voidgrid-secrets"
 
-rqlited -http-addr 127.0.0.1:4001 -raft-addr 127.0.0.1:4002 "$DEV_DIR/rqlite-data" \
+rqlited -fk -http-addr 127.0.0.1:4001 -raft-addr 127.0.0.1:4002 "$DEV_DIR/rqlite-data" \
     > "$DEV_DIR/rqlite.log" 2>&1 &
 RQLITED_PID=$!
 

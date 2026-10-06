@@ -1,11 +1,13 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
@@ -18,12 +20,12 @@ import (
 type SecretsHandler struct {
 	secrets *storage.SecretRepo
 	shares  *storage.ShareRepo
-	audit   *storage.AuditRepo
+	audit   audit.Logger
 }
 
 // NewSecretsHandler returns a SecretsHandler backed by the given repos.
-func NewSecretsHandler(secrets *storage.SecretRepo, shares *storage.ShareRepo, audit *storage.AuditRepo) *SecretsHandler {
-	return &SecretsHandler{secrets: secrets, shares: shares, audit: audit}
+func NewSecretsHandler(secrets *storage.SecretRepo, shares *storage.ShareRepo, auditLog audit.Logger) *SecretsHandler {
+	return &SecretsHandler{secrets: secrets, shares: shares, audit: auditLog}
 }
 
 type secretsListPage struct {
@@ -76,6 +78,10 @@ func (h *SecretsHandler) SubmitNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: audit.User(user.ID), Action: audit.SecretCreate, ResourceType: "secret", ResourceID: created.ID,
+		Details: map[string]string{"name": created.Name},
+	})
 	http.Redirect(w, r, "/secrets/"+strconv.FormatInt(created.ID, 10), http.StatusSeeOther)
 }
 
@@ -149,6 +155,7 @@ func (h *SecretsHandler) SubmitUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{Actor: audit.User(user.ID), Action: audit.SecretUpdate, ResourceType: "secret", ResourceID: id})
 
 	http.Redirect(w, r, "/secrets/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
@@ -183,7 +190,7 @@ func (h *SecretsHandler) Reveal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.audit.Log(r.Context(), "user", user.ID, "reveal", "secret", id); err != nil {
+	if err := h.audit.Log(r.Context(), audit.Event{Actor: audit.User(user.ID), Action: audit.SecretReveal, ResourceType: "secret", ResourceID: id}); err != nil {
 		// Logging failure shouldn't block the reveal the user is authorized
 		// for, but it's worth surfacing operationally.
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -223,9 +230,17 @@ func (h *SecretsHandler) SubmitCreateShare(w http.ResponseWriter, r *http.Reques
 	permission := r.FormValue("permission")
 
 	if err := h.shares.Create(r.Context(), id, granteeType, granteeID, permission, user.ID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			http.Error(w, "no such "+string(granteeType), http.StatusNotFound)
+			return
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: audit.User(user.ID), Action: audit.ShareCreate, ResourceType: "secret", ResourceID: id,
+		Details: map[string]string{"grantee_type": string(granteeType), "grantee_id": strconv.FormatInt(granteeID, 10), "permission": permission},
+	})
 
 	http.Redirect(w, r, "/secrets/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
@@ -253,6 +268,10 @@ func (h *SecretsHandler) SubmitDeleteShare(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: audit.User(user.ID), Action: audit.ShareDelete, ResourceType: "secret", ResourceID: id,
+		Details: map[string]string{"grantee_type": string(granteeType), "grantee_id": strconv.FormatInt(granteeID, 10)},
+	})
 
 	http.Redirect(w, r, "/secrets/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
@@ -267,6 +286,10 @@ func (h *SecretsHandler) requireAccess(w http.ResponseWriter, r *http.Request, u
 		return false
 	}
 	if !allowed {
+		audit.Record(r.Context(), h.audit, audit.Event{
+			Actor: audit.User(userID), Action: audit.AccessDenied, ResourceType: "secret", ResourceID: secretID,
+			Details: map[string]string{"permission": permission},
+		})
 		http.Error(w, "you are not authorized for this secret", http.StatusForbidden)
 		return false
 	}

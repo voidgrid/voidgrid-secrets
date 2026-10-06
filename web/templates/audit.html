@@ -1,0 +1,44 @@
+{{define "content"}}
+<h1>audit log</h1>
+<form class="stack" method="get" action="/admin/audit">
+    <label>action
+        <input type="text" name="action" value="{{index .Filter "action"}}" placeholder="e.g. reveal, login_failed, token_grant">
+    </label>
+    <label>actor type
+        <select name="actor_type">
+            <option value="">any</option>
+            {{$at := index .Filter "actor_type"}}
+            <option value="user"{{if eq $at "user"}} selected{{end}}>user</option>
+            <option value="token"{{if eq $at "token"}} selected{{end}}>token</option>
+            <option value="anonymous"{{if eq $at "anonymous"}} selected{{end}}>anonymous</option>
+            <option value="system"{{if eq $at "system"}} selected{{end}}>system</option>
+        </select>
+    </label>
+    <label>actor id
+        <input type="number" name="actor_id" min="1" value="{{index .Filter "actor_id"}}">
+    </label>
+    <label>resource type
+        <input type="text" name="resource_type" value="{{index .Filter "resource_type"}}" placeholder="secret, user, group, token, setup">
+    </label>
+    <label>resource id
+        <input type="number" name="resource_id" min="1" value="{{index .Filter "resource_id"}}">
+    </label>
+    <button type="submit">filter</button>
+</form>
+<p class="muted"><a href="/admin/audit">clear filters</a> - newest first, times in UTC</p>
+<table>
+    <tr><th>time</th><th>actor</th><th>action</th><th>resource</th><th>details</th></tr>
+    {{range .Rows}}
+    <tr>
+        <td class="mono">{{.At.UTC.Format "2006-01-02 15:04:05"}}</td>
+        <td>{{.Actor}}</td>
+        <td><a href="/admin/audit?action={{.Action}}">{{.Action}}</a></td>
+        <td>{{if .ResourceID}}<a href="/admin/audit?resource_type={{.ResourceType}}&amp;resource_id={{.ResourceID}}">{{.Resource}}</a>{{else}}{{.Resource}}{{end}}</td>
+        <td class="mono">{{range $k, $v := .Details}}{{if $v}}{{$k}}={{$v}} {{end}}{{end}}</td>
+    </tr>
+    {{else}}
+    <tr><td colspan="5" class="muted">no entries</td></tr>
+    {{end}}
+</table>
+{{if .OlderURL}}<p><a href="{{.OlderURL}}">older entries &rarr;</a></p>{{end}}
+{{end}}

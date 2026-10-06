@@ -31,9 +31,13 @@ unprivileged as UID/GID 1000.
    docker compose -f examples/docker-compose.yml up -d
    ```
 
-3. Before exposing it anywhere you don't trust, open `/setup` and complete
-   the first-run wizard - until that's done, anyone who can reach the
-   instance can claim the admin account.
+3. Get the one-time setup token from the log:
+
+   ```
+   docker compose -f examples/docker-compose.yml logs voidgrid-secrets | grep 'setup token'
+   ```
+
+4. Open `/setup`, enter the token, and complete the first-run wizard.
 
 ## Documentation
 
@@ -42,7 +46,10 @@ unprivileged as UID/GID 1000.
   other containers.
 - [docs/authentication.md](docs/authentication.md) - the setup wizard,
   password + TOTP, OIDC (including the callback URL to register with your
-  provider), recovery codes, and sessions.
+  provider), recovery codes, sessions, sign-in lockout, and what admins
+  can see.
+- [docs/audit-log.md](docs/audit-log.md) - what's recorded, and the
+  viewer at `/admin/audit`.
 - [docs/runtime-injection.md](docs/runtime-injection.md) -
   `voidgrid-secrets run`: give another container its secrets at startup,
   as environment variables or tmpfs files, without writing them to disk;

@@ -36,6 +36,7 @@ func newTestDB(t *testing.T) (*storage.DB, string) {
 
 	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	cmd := exec.Command("rqlited", //nolint:gosec // fixed binary name + test-generated args, not attacker-controlled
+		"-fk",
 		"-http-addr", httpAddr,
 		"-raft-addr", fmt.Sprintf("127.0.0.1:%d", raftPort),
 		dataDir,

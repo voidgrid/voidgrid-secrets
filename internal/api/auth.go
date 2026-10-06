@@ -7,12 +7,16 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
+	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
 // SessionRevoker is the subset of session storage the logout handler needs.
 type SessionRevoker interface {
 	Revoke(ctx context.Context, plaintext string) error
+	// Authenticate identifies the session being ended, for the audit log.
+	Authenticate(ctx context.Context, plaintext string) (model.User, error)
 }
 
 // AuthHandler implements login and logout for the password+TOTP web
@@ -20,11 +24,12 @@ type SessionRevoker interface {
 type AuthHandler struct {
 	login    *session.LoginService
 	sessions SessionRevoker
+	audit    audit.Logger
 }
 
 // NewAuthHandler returns an AuthHandler backed by login and sessions.
-func NewAuthHandler(login *session.LoginService, sessions SessionRevoker) *AuthHandler {
-	return &AuthHandler{login: login, sessions: sessions}
+func NewAuthHandler(login *session.LoginService, sessions SessionRevoker, auditLog audit.Logger) *AuthHandler {
+	return &AuthHandler{login: login, sessions: sessions, audit: auditLog}
 }
 
 // RegisterAuth registers the login/logout operations on api.
@@ -101,6 +106,9 @@ type LogoutOutput struct {
 // the end state (logged out) is the same either way.
 func (h *AuthHandler) Logout(ctx context.Context, in *LogoutInput) (*LogoutOutput, error) {
 	if in.Session != "" {
+		if u, err := h.sessions.Authenticate(ctx, in.Session); err == nil {
+			audit.Record(ctx, h.audit, audit.Event{Actor: audit.User(u.ID), Action: audit.Logout, ResourceType: "user", ResourceID: u.ID})
+		}
 		_ = h.sessions.Revoke(ctx, in.Session)
 	}
 

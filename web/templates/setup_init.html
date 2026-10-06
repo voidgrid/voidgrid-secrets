@@ -2,8 +2,11 @@
 <h1>first-run setup</h1>
 <p class="muted">No admin account exists yet. Create one to continue. You'll enroll TOTP in the next step.</p>
 <form class="stack" method="post" action="/setup">
+    <label>setup token <span class="muted">(printed in the server log at startup)</span>
+        <input type="password" name="setup_token" autocomplete="off" required autofocus>
+    </label>
     <label>username
-        <input type="text" name="username" required autofocus>
+        <input type="text" name="username" required>
     </label>
     <label>password
         <input type="password" name="password" minlength="14" required>

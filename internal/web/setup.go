@@ -34,6 +34,9 @@ func (h *SetupHandler) ShowInit(w http.ResponseWriter, _ *http.Request) {
 
 type setupConfirmPage struct {
 	basePage
+	// SetupToken is carried to the confirm step in a hidden field, since
+	// that step needs it too.
+	SetupToken      string
 	Username        string
 	Secret          string
 	ProvisioningURI string
@@ -46,6 +49,7 @@ func (h *SetupHandler) SubmitInit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
+	setupToken := r.FormValue("setup_token")
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 
@@ -56,7 +60,7 @@ func (h *SetupHandler) SubmitInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secret, uri, err := h.wizard.InitPasswordSetup(r.Context(), username, password)
+	secret, uri, err := h.wizard.InitPasswordSetup(r.Context(), setupToken, username, password)
 	if err != nil {
 		render(w, http.StatusBadRequest, "setup_init", setupInitPage{basePage: basePage{Error: err.Error()}})
 		return
@@ -69,6 +73,7 @@ func (h *SetupHandler) SubmitInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	render(w, http.StatusOK, "setup_confirm", setupConfirmPage{
+		SetupToken:      setupToken,
 		Username:        username,
 		Secret:          secret,
 		ProvisioningURI: uri,
@@ -93,14 +98,16 @@ func (h *SetupHandler) SubmitConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
+	setupToken := r.FormValue("setup_token")
 	username := r.FormValue("username")
 	code := r.FormValue("code")
 
-	codes, err := h.wizard.ConfirmPasswordSetup(r.Context(), username, code)
+	codes, err := h.wizard.ConfirmPasswordSetup(r.Context(), setupToken, username, code)
 	if err != nil {
 		render(w, http.StatusBadRequest, "setup_confirm", setupConfirmPage{
-			basePage: basePage{Error: err.Error()},
-			Username: username,
+			basePage:   basePage{Error: err.Error()},
+			SetupToken: setupToken,
+			Username:   username,
 		})
 		return
 	}
@@ -136,10 +143,21 @@ func (h *SetupHandler) SubmitOIDCSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
+	setupToken := r.FormValue("setup_token")
 	issuer := r.FormValue("issuer")
 	clientID := r.FormValue("client_id")
 	clientSecret := r.FormValue("client_secret")
 	redirectURI := r.FormValue("redirect_uri")
+
+	// Checked before discovery, so nobody without the token can make this
+	// server fetch an arbitrary URL.
+	if err := h.wizard.CheckSetupToken(r.Context(), setupToken); err != nil {
+		render(w, http.StatusForbidden, "setup_oidc", setupOIDCPage{
+			basePage:             basePage{Error: err.Error()},
+			SuggestedRedirectURI: redirectURI,
+		})
+		return
+	}
 
 	client, err := oidcclient.New(r.Context(), oidcclient.Config{
 		Issuer:       issuer,
@@ -155,7 +173,7 @@ func (h *SetupHandler) SubmitOIDCSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.wizard.SetupOIDC(r.Context(), issuer, clientID, clientSecret, redirectURI); err != nil {
+	if err := h.wizard.SetupOIDC(r.Context(), setupToken, issuer, clientID, clientSecret, redirectURI); err != nil {
 		render(w, http.StatusBadRequest, "setup_oidc", setupOIDCPage{
 			basePage:             basePage{Error: err.Error()},
 			SuggestedRedirectURI: redirectURI,

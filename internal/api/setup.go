@@ -82,8 +82,9 @@ func (h *SetupHandler) Status(ctx context.Context, _ *EmptyInput) (*SetupStatusO
 // InitPasswordSetupInput carries the first admin account's credentials.
 type InitPasswordSetupInput struct {
 	Body struct {
-		Username string `json:"username" minLength:"1"`
-		Password string `json:"password" minLength:"14"`
+		SetupToken string `json:"setup_token" minLength:"1" doc:"The setup token printed in the server log at startup"`
+		Username   string `json:"username" minLength:"1"`
+		Password   string `json:"password" minLength:"14"`
 	}
 }
 
@@ -98,7 +99,7 @@ type InitPasswordSetupOutput struct {
 
 // InitPassword creates the first admin account and begins TOTP enrollment.
 func (h *SetupHandler) InitPassword(ctx context.Context, in *InitPasswordSetupInput) (*InitPasswordSetupOutput, error) {
-	secret, uri, err := h.wizard.InitPasswordSetup(ctx, in.Body.Username, in.Body.Password)
+	secret, uri, err := h.wizard.InitPasswordSetup(ctx, in.Body.SetupToken, in.Body.Username, in.Body.Password)
 	if err != nil {
 		return nil, mapSetupErr(err)
 	}
@@ -111,8 +112,9 @@ func (h *SetupHandler) InitPassword(ctx context.Context, in *InitPasswordSetupIn
 // ConfirmPasswordSetupInput carries the admin's first TOTP code.
 type ConfirmPasswordSetupInput struct {
 	Body struct {
-		Username string `json:"username"`
-		Code     string `json:"code"`
+		SetupToken string `json:"setup_token" minLength:"1" doc:"The setup token printed in the server log at startup"`
+		Username   string `json:"username"`
+		Code       string `json:"code"`
 	}
 }
 
@@ -126,7 +128,7 @@ type ConfirmPasswordSetupOutput struct {
 
 // ConfirmPassword validates the admin's TOTP code and completes setup.
 func (h *SetupHandler) ConfirmPassword(ctx context.Context, in *ConfirmPasswordSetupInput) (*ConfirmPasswordSetupOutput, error) {
-	codes, err := h.wizard.ConfirmPasswordSetup(ctx, in.Body.Username, in.Body.Code)
+	codes, err := h.wizard.ConfirmPasswordSetup(ctx, in.Body.SetupToken, in.Body.Username, in.Body.Code)
 	if err != nil {
 		return nil, mapSetupErr(err)
 	}
@@ -139,6 +141,7 @@ func (h *SetupHandler) ConfirmPassword(ctx context.Context, in *ConfirmPasswordS
 // be the exact callback URL registered with the provider.
 type SetupOIDCInput struct {
 	Body struct {
+		SetupToken   string `json:"setup_token" minLength:"1" doc:"The setup token printed in the server log at startup"`
 		Issuer       string `json:"issuer"`
 		ClientID     string `json:"client_id"`
 		ClientSecret string `json:"client_secret"`
@@ -154,6 +157,11 @@ type SetupOIDCOutput struct{}
 // before storing anything - failing fast on a bad issuer here, at setup
 // time, beats silently storing a config that can never work.
 func (h *SetupHandler) SetupOIDC(ctx context.Context, in *SetupOIDCInput) (*SetupOIDCOutput, error) {
+	// Checked before discovery, so nobody without the token can make this
+	// server fetch an arbitrary URL.
+	if err := h.wizard.CheckSetupToken(ctx, in.Body.SetupToken); err != nil {
+		return nil, mapSetupErr(err)
+	}
 	client, err := oidcclient.New(ctx, oidcclient.Config{
 		Issuer:       in.Body.Issuer,
 		ClientID:     in.Body.ClientID,
@@ -164,7 +172,7 @@ func (h *SetupHandler) SetupOIDC(ctx context.Context, in *SetupOIDCInput) (*Setu
 		return nil, huma.Error400BadRequest("failed to discover OIDC issuer - check the issuer URL and that this server can reach it", err)
 	}
 
-	if err := h.wizard.SetupOIDC(ctx, in.Body.Issuer, in.Body.ClientID, in.Body.ClientSecret, in.Body.RedirectURI); err != nil {
+	if err := h.wizard.SetupOIDC(ctx, in.Body.SetupToken, in.Body.Issuer, in.Body.ClientID, in.Body.ClientSecret, in.Body.RedirectURI); err != nil {
 		return nil, mapSetupErr(err)
 	}
 
@@ -174,6 +182,8 @@ func (h *SetupHandler) SetupOIDC(ctx context.Context, in *SetupOIDCInput) (*Setu
 
 func mapSetupErr(err error) error {
 	switch {
+	case errors.Is(err, setup.ErrInvalidSetupToken):
+		return huma.Error403Forbidden("invalid setup token - use the one printed in the server log at startup")
 	case errors.Is(err, setup.ErrAlreadyComplete):
 		return huma.Error409Conflict("setup already completed", err)
 	case errors.Is(err, setup.ErrAdminPending):

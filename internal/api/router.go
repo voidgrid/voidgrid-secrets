@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/token"
 )
@@ -28,6 +29,9 @@ type Deps struct {
 	UsersHandler   *UsersHandler
 	GroupsHandler  *GroupsHandler
 	TokensHandler  *TokensHandler
+	AuditHandler   *AuditHandler
+	// Audit records rejected machine tokens.
+	Audit audit.Logger
 }
 
 // NewRouter builds the complete HTTP router: the OpenAPI spec and docs UI
@@ -64,11 +68,11 @@ func NewRouter(deps Deps) http.Handler {
 	RegisterAuth(v1, deps.AuthHandler)
 
 	v1Secrets := huma.NewGroup(v1)
-	v1Secrets.UseMiddleware(secretsAuthMiddleware(humaAPI, deps.TokenAuth, deps.SessionAuth))
+	v1Secrets.UseMiddleware(secretsAuthMiddleware(humaAPI, deps.TokenAuth, deps.SessionAuth, deps.Audit))
 	RegisterSecrets(v1Secrets, deps.SecretsHandler)
 
 	v1Env := huma.NewGroup(v1)
-	v1Env.UseMiddleware(tokenAuthMiddleware(humaAPI, deps.TokenAuth))
+	v1Env.UseMiddleware(tokenAuthMiddleware(humaAPI, deps.TokenAuth, deps.Audit))
 	RegisterEnv(v1Env, deps.EnvHandler)
 
 	v1Shares := huma.NewGroup(v1)
@@ -80,6 +84,7 @@ func NewRouter(deps Deps) http.Handler {
 	RegisterUsers(admin, deps.UsersHandler)
 	RegisterGroups(admin, deps.GroupsHandler)
 	RegisterTokens(admin, deps.TokensHandler)
+	RegisterAudit(admin, deps.AuditHandler)
 
 	// Same protection as the web UI (see web.crossOriginProtection): the
 	// session-cookie routes would otherwise accept bodiless POSTs (token

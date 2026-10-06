@@ -77,9 +77,11 @@ func (r *GroupRepo) List(ctx context.Context) ([]model.Group, error) {
 func (r *GroupRepo) AddMember(ctx context.Context, groupID, userID int64, role model.GroupRole) error {
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
-			Query: `INSERT INTO user_groups (user_id, group_id, role) VALUES (?, ?, ?)
+			Query: `INSERT INTO user_groups (user_id, group_id, role)
+				SELECT ?, ?, ?
+				WHERE EXISTS (SELECT 1 FROM users WHERE id = ?) AND EXISTS (SELECT 1 FROM groups WHERE id = ?)
 				ON CONFLICT (user_id, group_id) DO UPDATE SET role = excluded.role`,
-			Arguments: []interface{}{userID, groupID, string(role)},
+			Arguments: []interface{}{userID, groupID, string(role), userID, groupID},
 		},
 	})
 	if err != nil {
@@ -87,6 +89,9 @@ func (r *GroupRepo) AddMember(ctx context.Context, groupID, userID int64, role m
 	}
 	if results[0].Err != nil {
 		return fmt.Errorf("storage: add member %d to group %d: %w", userID, groupID, results[0].Err)
+	}
+	if results[0].RowsAffected == 0 {
+		return fmt.Errorf("%w: user %d or group %d", ErrNotFound, userID, groupID)
 	}
 	return nil
 }

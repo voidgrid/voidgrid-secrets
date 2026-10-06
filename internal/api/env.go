@@ -13,6 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/conditional"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/token"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
@@ -24,12 +25,12 @@ import (
 type EnvHandler struct {
 	tokens  *storage.TokenRepo
 	secrets *storage.SecretRepo
-	audit   *storage.AuditRepo
+	audit   audit.Logger
 }
 
 // NewEnvHandler returns an EnvHandler backed by the given repos.
-func NewEnvHandler(tokens *storage.TokenRepo, secrets *storage.SecretRepo, audit *storage.AuditRepo) *EnvHandler {
-	return &EnvHandler{tokens: tokens, secrets: secrets, audit: audit}
+func NewEnvHandler(tokens *storage.TokenRepo, secrets *storage.SecretRepo, auditLog audit.Logger) *EnvHandler {
+	return &EnvHandler{tokens: tokens, secrets: secrets, audit: auditLog}
 }
 
 // RegisterEnv registers the env operation on api (a huma.Group
@@ -122,7 +123,10 @@ func (h *EnvHandler) Get(ctx context.Context, in *GetEnvInput) (*GetEnvOutput, e
 		if err != nil {
 			return nil, huma.Error500InternalServerError("internal error")
 		}
-		if err := h.audit.Log(ctx, "token", mt.ID, "reveal", "secret", g.SecretID); err != nil {
+		if err := h.audit.Log(ctx, audit.Event{
+			Actor: audit.Token(mt.ID), Action: audit.SecretReveal, ResourceType: "secret", ResourceID: g.SecretID,
+			Details: map[string]string{"via": "env", "env_name": g.EnvName},
+		}); err != nil {
 			return nil, huma.Error500InternalServerError("internal error")
 		}
 		out.Body.Secrets = append(out.Body.Secrets, EnvSecret{

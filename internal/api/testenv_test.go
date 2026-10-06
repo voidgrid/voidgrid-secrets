@@ -19,6 +19,8 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
 
+const testSetupToken = "vgs_setup_test" //nolint:gosec // fake test fixture, not a real credential
+
 // env is a full, real stack (rqlite + storage + HTTP router) for exercising
 // the API end-to-end, per the project's testing strategy: these
 // boundary/security tests use real components, not mocks.
@@ -54,6 +56,7 @@ func newEnv(t *testing.T, completeSetup bool) env {
 	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 
 	cmd := exec.Command("rqlited", //nolint:gosec // fixed binary name + test-generated args
+		"-fk",
 		"-http-addr", httpAddr,
 		"-raft-addr", fmt.Sprintf("127.0.0.1:%d", raftPort),
 		dataDir,
@@ -94,7 +97,11 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		}
 	}
 
+	auditRepo := storage.NewAuditRepo(db)
+
 	wizard := &setup.Wizard{
+		Audit:                 auditRepo,
+		SetupToken:            testSetupToken,
 		Users:                 userRepo,
 		AuthConfig:            authConfigRepo,
 		RecoveryCodes:         recoveryCodeRepo,
@@ -105,6 +112,7 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		HashRecoveryCode:      crypto.HashToken,
 	}
 	loginService := &gosession.LoginService{
+		Audit:          auditRepo,
 		Users:          userRepo,
 		Sessions:       sessionRepo,
 		VerifyPassword: crypto.VerifyPassword,
@@ -116,13 +124,15 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		TokenAuth:      tokenRepo,
 		SessionAuth:    sessionRepo,
 		SetupHandler:   api.NewSetupHandler(wizard, &oidcclient.Provider{}),
-		AuthHandler:    api.NewAuthHandler(loginService, sessionRepo),
-		SecretsHandler: api.NewSecretsHandler(secretRepo),
-		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, storage.NewAuditRepo(db)),
-		SharesHandler:  api.NewSharesHandler(secretRepo, shareRepo),
-		UsersHandler:   api.NewUsersHandler(userRepo),
-		GroupsHandler:  api.NewGroupsHandler(groupRepo),
-		TokensHandler:  api.NewTokensHandler(tokenRepo),
+		AuthHandler:    api.NewAuthHandler(loginService, sessionRepo, auditRepo),
+		SecretsHandler: api.NewSecretsHandler(secretRepo, auditRepo),
+		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, auditRepo),
+		SharesHandler:  api.NewSharesHandler(secretRepo, shareRepo, auditRepo),
+		UsersHandler:   api.NewUsersHandler(userRepo, auditRepo),
+		GroupsHandler:  api.NewGroupsHandler(groupRepo, auditRepo),
+		TokensHandler:  api.NewTokensHandler(tokenRepo, auditRepo),
+		AuditHandler:   api.NewAuditHandler(auditRepo),
+		Audit:          auditRepo,
 	})
 
 	return env{

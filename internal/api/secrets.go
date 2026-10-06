@@ -6,6 +6,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/token"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
@@ -17,12 +18,13 @@ import (
 // human session (ownership/group-membership/sharing-based) on every
 // request.
 type SecretsHandler struct {
-	repo *storage.SecretRepo
+	repo  *storage.SecretRepo
+	audit audit.Logger
 }
 
 // NewSecretsHandler returns a SecretsHandler backed by repo.
-func NewSecretsHandler(repo *storage.SecretRepo) *SecretsHandler {
-	return &SecretsHandler{repo: repo}
+func NewSecretsHandler(repo *storage.SecretRepo, auditLog audit.Logger) *SecretsHandler {
+	return &SecretsHandler{repo: repo, audit: auditLog}
 }
 
 // SecretMetadata is the API representation of a secret's metadata, decoupled
@@ -122,6 +124,10 @@ func (h *SecretsHandler) Reveal(ctx context.Context, in *GetSecretInput) (*Revea
 	if err != nil {
 		return nil, huma.Error404NotFound("secret not found", err)
 	}
+	// A value is never handed out unrecorded.
+	if err := h.audit.Log(ctx, audit.Event{Actor: actorFrom(ctx), Action: audit.SecretReveal, ResourceType: "secret", ResourceID: in.ID}); err != nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
 
 	out := &RevealSecretOutput{}
 	out.Body.Value = string(value)
@@ -147,6 +153,7 @@ func (h *SecretsHandler) Update(ctx context.Context, in *UpdateSecretInput) (*Ge
 	if err != nil {
 		return nil, huma.Error404NotFound("secret not found", err)
 	}
+	audit.Record(ctx, h.audit, audit.Event{Actor: actorFrom(ctx), Action: audit.SecretUpdate, ResourceType: "secret", ResourceID: in.ID})
 
 	return &GetSecretMetadataOutput{Body: toSecretMetadata(s)}, nil
 }
@@ -159,6 +166,7 @@ func (h *SecretsHandler) Update(ctx context.Context, in *UpdateSecretInput) (*Ge
 func (h *SecretsHandler) requireAccess(ctx context.Context, secretID int64, permission string) error {
 	if _, acls, ok := token.FromContext(ctx); ok {
 		if !token.CanAccess(acls, "secret", secretID, permission) {
+			h.denied(ctx, secretID, permission)
 			return huma.Error403Forbidden("token is not authorized for this secret")
 		}
 		return nil
@@ -170,10 +178,18 @@ func (h *SecretsHandler) requireAccess(ctx context.Context, secretID int64, perm
 			return huma.Error500InternalServerError("internal error", err)
 		}
 		if !allowed {
+			h.denied(ctx, secretID, permission)
 			return huma.Error403Forbidden("you are not authorized for this secret")
 		}
 		return nil
 	}
 
 	return huma.Error401Unauthorized("authentication required")
+}
+
+func (h *SecretsHandler) denied(ctx context.Context, secretID int64, permission string) {
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.AccessDenied, ResourceType: "secret", ResourceID: secretID,
+		Details: map[string]string{"permission": permission},
+	})
 }

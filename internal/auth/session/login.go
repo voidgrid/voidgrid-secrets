@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
@@ -60,6 +61,8 @@ type LoginService struct {
 	// Limiter throttles repeated failures per username, across both login
 	// flows. nil means no limit.
 	Limiter *AttemptLimiter
+	// Audit records every attempt. nil records nothing.
+	Audit audit.Logger
 }
 
 var (
@@ -77,52 +80,99 @@ func dummyPasswordHash() string {
 	return dummyHash
 }
 
-// limited runs a login attempt for username through s.Limiter: refused
+// attempt is the outcome of one login attempt, for the limiter and the
+// audit log.
+type attempt struct {
+	plaintext string
+	expiresAt time.Time
+	// userID is the account the username belongs to, if any (0 if none).
+	userID int64
+	// reason says why a failed attempt failed. It's recorded in the audit
+	// log (which only admins can read) but never returned to the client.
+	reason string
+	err    error
+}
+
+func failed(userID int64, reason string) attempt {
+	return attempt{userID: userID, reason: reason, err: ErrInvalidCredentials}
+}
+
+// limited runs a login attempt for username through s.Limiter - refused
 // outright while the username is locked out, counted as a failure on
-// ErrInvalidCredentials, and clearing the count on success.
-func (s *LoginService) limited(username string, attempt func() (string, time.Time, error)) (string, time.Time, error) {
+// ErrInvalidCredentials, clearing the count on success - and records the
+// outcome in the audit log.
+func (s *LoginService) limited(ctx context.Context, username, method, okAction, failAction string, run func() attempt) (string, time.Time, error) {
+	details := map[string]string{"username": truncateDetail(username), "method": method}
 	if !s.Limiter.Allow(username) {
+		audit.Record(ctx, s.Audit, audit.Event{Actor: audit.Anonymous(), Action: audit.LoginLockedOut, ResourceType: "user", Details: details})
 		return "", time.Time{}, ErrTooManyAttempts
 	}
-	plaintext, expiresAt, err := attempt()
+	a := run()
 	switch {
-	case err == nil:
+	case a.err == nil:
 		s.Limiter.Succeed(username)
-	case errors.Is(err, ErrInvalidCredentials):
+		audit.Record(ctx, s.Audit, audit.Event{Actor: audit.User(a.userID), Action: okAction, ResourceType: "user", ResourceID: a.userID, Details: details})
+	case errors.Is(a.err, ErrInvalidCredentials):
 		s.Limiter.Fail(username)
+		details["reason"] = a.reason
+		audit.Record(ctx, s.Audit, audit.Event{Actor: audit.Anonymous(), Action: failAction, ResourceType: "user", ResourceID: a.userID, Details: details})
 	}
-	return plaintext, expiresAt, err
+	return a.plaintext, a.expiresAt, a.err
+}
+
+// truncateDetail bounds a client-supplied string before it's recorded.
+func truncateDetail(s string) string {
+	if len(s) > 100 {
+		return s[:100]
+	}
+	return s
 }
 
 // Login authenticates username/password/totpCode and, on success, returns
 // a new session token and its expiry.
 func (s *LoginService) Login(ctx context.Context, username, password, totpCode string) (plaintext string, expiresAt time.Time, err error) {
-	return s.limited(username, func() (string, time.Time, error) {
+	return s.limited(ctx, username, "password", audit.Login, audit.LoginFailed, func() attempt {
 		return s.login(ctx, username, password, totpCode)
 	})
 }
 
-func (s *LoginService) login(ctx context.Context, username, password, totpCode string) (plaintext string, expiresAt time.Time, err error) {
+func (s *LoginService) login(ctx context.Context, username, password, totpCode string) attempt {
 	rec, err := s.Users.GetAuthRecord(ctx, username)
 	// OIDC-only users (or any other method), disabled accounts and users
 	// without a password can't use this flow - but the password is still
 	// checked, against a dummy hash, so they take as long to reject as a
 	// wrong password does.
-	eligible := err == nil && !rec.Disabled && rec.AuthMethod == model.AuthPasswordTOTP && rec.PasswordHash != ""
+	var reason string
+	switch {
+	case err != nil:
+		reason = "unknown user"
+	case rec.Disabled:
+		reason = "account disabled"
+	case rec.AuthMethod != model.AuthPasswordTOTP:
+		reason = "account uses " + string(rec.AuthMethod)
+	case rec.PasswordHash == "":
+		reason = "no password set"
+	}
 	hash := rec.PasswordHash
-	if !eligible {
+	if reason != "" {
 		hash = dummyPasswordHash()
 	}
 
-	ok, err := s.VerifyPassword(password, hash)
-	if !eligible || err != nil || !ok {
-		return "", time.Time{}, ErrInvalidCredentials
+	ok, verr := s.VerifyPassword(password, hash)
+	if reason != "" {
+		return failed(rec.ID, reason)
+	}
+	if verr != nil || !ok {
+		return failed(rec.ID, "wrong password")
 	}
 
 	// TOTP is required with no bypass: a user who hasn't completed
 	// enrollment (empty secret) cannot log in, full stop.
-	if rec.TOTPSecret == "" || !s.ValidateTOTP(totpCode, rec.TOTPSecret) {
-		return "", time.Time{}, ErrInvalidCredentials
+	if rec.TOTPSecret == "" {
+		return failed(rec.ID, "TOTP not enrolled")
+	}
+	if !s.ValidateTOTP(totpCode, rec.TOTPSecret) {
+		return failed(rec.ID, "wrong TOTP code")
 	}
 
 	// Reject a code that's already been used once: TOTP codes stay valid
@@ -130,15 +180,19 @@ func (s *LoginService) login(ctx context.Context, username, password, totpCode s
 	// code captured in transit could be replayed within that window.
 	fresh, err := s.Users.ConsumeTOTPCode(ctx, rec.ID, totpCode)
 	if err != nil || !fresh {
-		return "", time.Time{}, ErrInvalidCredentials
+		return failed(rec.ID, "TOTP code already used")
 	}
 
+	return s.newSession(ctx, rec.ID)
+}
+
+func (s *LoginService) newSession(ctx context.Context, userID int64) attempt {
 	ttl := s.TTL
 	if ttl == 0 {
 		ttl = DefaultTTL
 	}
-
-	return s.Sessions.Create(ctx, rec.ID, ttl)
+	plaintext, expiresAt, err := s.Sessions.Create(ctx, userID, ttl)
+	return attempt{plaintext: plaintext, expiresAt: expiresAt, userID: userID, err: err}
 }
 
 // LoginWithRecoveryCode authenticates username/code against the user's
@@ -148,29 +202,24 @@ func (s *LoginService) login(ctx context.Context, username, password, totpCode s
 // path shared by both, since both GetAuthRecord lookups and the codes
 // themselves are keyed by user, not by auth method.
 func (s *LoginService) LoginWithRecoveryCode(ctx context.Context, username, code string) (plaintext string, expiresAt time.Time, err error) {
-	return s.limited(username, func() (string, time.Time, error) {
+	return s.limited(ctx, username, "recovery code", audit.RecoveryLogin, audit.RecoveryLoginFailed, func() attempt {
 		return s.loginWithRecoveryCode(ctx, username, code)
 	})
 }
 
-func (s *LoginService) loginWithRecoveryCode(ctx context.Context, username, code string) (plaintext string, expiresAt time.Time, err error) {
+func (s *LoginService) loginWithRecoveryCode(ctx context.Context, username, code string) attempt {
 	rec, err := s.Users.GetAuthRecord(ctx, username)
 	if err != nil {
-		return "", time.Time{}, ErrInvalidCredentials
+		return failed(0, "unknown user")
 	}
 	if rec.Disabled {
-		return "", time.Time{}, ErrInvalidCredentials
+		return failed(rec.ID, "account disabled")
 	}
 
 	ok, err := s.RecoveryCodes.Consume(ctx, rec.ID, crypto.HashToken(code))
 	if err != nil || !ok {
-		return "", time.Time{}, ErrInvalidCredentials
+		return failed(rec.ID, "wrong or used recovery code")
 	}
 
-	ttl := s.TTL
-	if ttl == 0 {
-		ttl = DefaultTTL
-	}
-
-	return s.Sessions.Create(ctx, rec.ID, ttl)
+	return s.newSession(ctx, rec.ID)
 }

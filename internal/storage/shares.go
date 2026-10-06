@@ -25,9 +25,17 @@ func (r *ShareRepo) Create(ctx context.Context, secretID int64, granteeType mode
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
 			Query: `INSERT INTO secret_shares (secret_id, grantee_type, grantee_id, permission, granted_by, granted_at)
-				VALUES (?, ?, ?, ?, ?, ?)
+				SELECT ?, ?, ?, ?, ?, ?
+				WHERE EXISTS (SELECT 1 FROM secrets WHERE id = ?)
+					AND ((? = 'user' AND EXISTS (SELECT 1 FROM users WHERE id = ?))
+						OR (? = 'group' AND EXISTS (SELECT 1 FROM groups WHERE id = ?)))
 				ON CONFLICT (secret_id, grantee_type, grantee_id) DO UPDATE SET permission = excluded.permission`,
-			Arguments: []interface{}{secretID, string(granteeType), granteeID, permission, grantedBy, nowTimestamp()},
+			Arguments: []interface{}{
+				secretID, string(granteeType), granteeID, permission, grantedBy, nowTimestamp(),
+				secretID,
+				string(granteeType), granteeID,
+				string(granteeType), granteeID,
+			},
 		},
 	})
 	if err != nil {
@@ -35,6 +43,9 @@ func (r *ShareRepo) Create(ctx context.Context, secretID int64, granteeType mode
 	}
 	if results[0].Err != nil {
 		return fmt.Errorf("storage: share secret %d: %w", secretID, results[0].Err)
+	}
+	if results[0].RowsAffected == 0 {
+		return fmt.Errorf("%w: secret %d or %s %d", ErrNotFound, secretID, granteeType, granteeID)
 	}
 	return nil
 }

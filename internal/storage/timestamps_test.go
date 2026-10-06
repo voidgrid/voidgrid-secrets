@@ -7,6 +7,7 @@ import (
 
 	"github.com/rqlite/gorqlite"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
@@ -50,7 +51,7 @@ func TestTimestampsAreWrittenAtInsertTime(t *testing.T) {
 	if _, _, err := storage.NewSessionRepo(db).Create(ctx, user.ID, time.Hour); err != nil {
 		t.Fatalf("session Create: %v", err)
 	}
-	if err := storage.NewAuditRepo(db).Log(ctx, "user", user.ID, "reveal", "secret", secret.ID); err != nil {
+	if err := storage.NewAuditRepo(db).Log(ctx, audit.Event{Actor: audit.User(user.ID), Action: audit.SecretReveal, ResourceType: "secret", ResourceID: secret.ID}); err != nil {
 		t.Fatalf("audit Log: %v", err)
 	}
 	if err := storage.NewRecoveryCodeRepo(db).ReplaceForUser(ctx, user.ID, []string{"hash"}); err != nil {

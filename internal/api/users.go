@@ -6,6 +6,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/totp"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
@@ -18,11 +19,12 @@ import (
 // machine token.
 type UsersHandler struct {
 	users *storage.UserRepo
+	audit audit.Logger
 }
 
 // NewUsersHandler returns a UsersHandler backed by users.
-func NewUsersHandler(users *storage.UserRepo) *UsersHandler {
-	return &UsersHandler{users: users}
+func NewUsersHandler(users *storage.UserRepo, auditLog audit.Logger) *UsersHandler {
+	return &UsersHandler{users: users, audit: auditLog}
 }
 
 // RegisterUsers registers the admin user-management operations on api.
@@ -134,6 +136,10 @@ func (h *UsersHandler) Create(ctx context.Context, in *CreateUserInput) (*Create
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
 
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.UserCreate, ResourceType: "user", ResourceID: user.ID,
+		Details: map[string]string{"username": user.Username, "method": "password_totp"},
+	})
 	out := &CreateUserOutput{}
 	out.Body.User = toUserOut(user)
 	out.Body.TOTPSecret = secret
@@ -157,5 +163,10 @@ func (h *UsersHandler) SetDisabled(ctx context.Context, in *SetUserDisabledInput
 	if err := h.users.SetDisabled(ctx, in.ID, in.Body.Disabled); err != nil {
 		return nil, huma.Error404NotFound("user not found", err)
 	}
+	action := audit.UserEnable
+	if in.Body.Disabled {
+		action = audit.UserDisable
+	}
+	audit.Record(ctx, h.audit, audit.Event{Actor: actorFrom(ctx), Action: action, ResourceType: "user", ResourceID: in.ID})
 	return &SetUserDisabledOutput{}, nil
 }

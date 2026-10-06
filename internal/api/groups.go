@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
@@ -14,11 +16,12 @@ import (
 // /api/v1/admin.
 type GroupsHandler struct {
 	groups *storage.GroupRepo
+	audit  audit.Logger
 }
 
 // NewGroupsHandler returns a GroupsHandler backed by groups.
-func NewGroupsHandler(groups *storage.GroupRepo) *GroupsHandler {
-	return &GroupsHandler{groups: groups}
+func NewGroupsHandler(groups *storage.GroupRepo, auditLog audit.Logger) *GroupsHandler {
+	return &GroupsHandler{groups: groups, audit: auditLog}
 }
 
 // RegisterGroups registers the admin group-management operations on api.
@@ -115,6 +118,10 @@ func (h *GroupsHandler) Create(ctx context.Context, in *CreateGroupInput) (*Crea
 	if err != nil {
 		return nil, huma.Error409Conflict("could not create group (name may already be taken)", err)
 	}
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.GroupCreate, ResourceType: "group", ResourceID: g.ID,
+		Details: map[string]string{"name": g.Name},
+	})
 	return &CreateGroupOutput{Body: toGroupOut(g)}, nil
 }
 
@@ -165,8 +172,15 @@ type AddGroupMemberOutput struct{}
 // AddMember adds (or changes the role of) a group member.
 func (h *GroupsHandler) AddMember(ctx context.Context, in *AddGroupMemberInput) (*AddGroupMemberOutput, error) {
 	if err := h.groups.AddMember(ctx, in.ID, in.Body.UserID, model.GroupRole(in.Body.Role)); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, huma.Error404NotFound("no such user or group")
+		}
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.GroupMemberAdd, ResourceType: "group", ResourceID: in.ID,
+		Details: map[string]string{"user_id": itoa(in.Body.UserID), "role": in.Body.Role},
+	})
 	return &AddGroupMemberOutput{}, nil
 }
 
@@ -184,5 +198,9 @@ func (h *GroupsHandler) RemoveMember(ctx context.Context, in *RemoveGroupMemberI
 	if err := h.groups.RemoveMember(ctx, in.ID, in.UserID); err != nil {
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.GroupMemberRemove, ResourceType: "group", ResourceID: in.ID,
+		Details: map[string]string{"user_id": itoa(in.UserID)},
+	})
 	return &RemoveGroupMemberOutput{}, nil
 }

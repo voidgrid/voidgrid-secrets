@@ -2,8 +2,11 @@
 <h1>first-run setup: OIDC</h1>
 <p class="muted">No admin account exists yet. Configure your identity provider to continue - the first person to log in via OIDC becomes the admin.</p>
 <form class="stack" method="post" action="/setup/oidc">
+    <label>setup token <span class="muted">(printed in the server log at startup)</span>
+        <input type="password" name="setup_token" autocomplete="off" required autofocus>
+    </label>
     <label>issuer URL
-        <input type="url" name="issuer" placeholder="https://accounts.example.com" required autofocus>
+        <input type="url" name="issuer" placeholder="https://accounts.example.com" required>
     </label>
     <label>client ID
         <input type="text" name="client_id" required>

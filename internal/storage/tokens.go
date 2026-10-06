@@ -171,8 +171,16 @@ func (r *TokenRepo) AddACL(ctx context.Context, tokenID int64, resourceType stri
 	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
 		{
 			Query: `INSERT INTO machine_token_acls (token_id, resource_type, resource_id, permission, env_name)
-				VALUES (?, ?, ?, ?, ?)`,
-			Arguments: []interface{}{tokenID, resourceType, resourceID, permission, storedEnvName},
+				SELECT ?, ?, ?, ?, ?
+				WHERE EXISTS (SELECT 1 FROM machine_tokens WHERE id = ?)
+					AND ((? = 'secret' AND EXISTS (SELECT 1 FROM secrets WHERE id = ?))
+						OR (? = 'group' AND EXISTS (SELECT 1 FROM groups WHERE id = ?)))`,
+			Arguments: []interface{}{
+				tokenID, resourceType, resourceID, permission, storedEnvName,
+				tokenID,
+				resourceType, resourceID,
+				resourceType, resourceID,
+			},
 		},
 	})
 	if err != nil {
@@ -180,6 +188,9 @@ func (r *TokenRepo) AddACL(ctx context.Context, tokenID int64, resourceType stri
 	}
 	if results[0].Err != nil {
 		return fmt.Errorf("storage: add ACL for token %d: %w", tokenID, results[0].Err)
+	}
+	if results[0].RowsAffected == 0 {
+		return fmt.Errorf("%w: token %d or %s %d", ErrNotFound, tokenID, resourceType, resourceID)
 	}
 	return nil
 }

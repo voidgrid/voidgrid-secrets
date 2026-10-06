@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
@@ -18,11 +20,12 @@ import (
 type SharesHandler struct {
 	secrets *storage.SecretRepo
 	shares  *storage.ShareRepo
+	audit   audit.Logger
 }
 
 // NewSharesHandler returns a SharesHandler backed by secrets and shares.
-func NewSharesHandler(secrets *storage.SecretRepo, shares *storage.ShareRepo) *SharesHandler {
-	return &SharesHandler{secrets: secrets, shares: shares}
+func NewSharesHandler(secrets *storage.SecretRepo, shares *storage.ShareRepo, auditLog audit.Logger) *SharesHandler {
+	return &SharesHandler{secrets: secrets, shares: shares, audit: auditLog}
 }
 
 // RegisterShares registers the sharing operations on api.
@@ -118,8 +121,15 @@ func (h *SharesHandler) Create(ctx context.Context, in *CreateShareInput) (*Crea
 
 	grantedBy, _ := gosession.FromContext(ctx) // presence already checked by requireSessionAccess
 	if err := h.shares.Create(ctx, in.ID, model.OwnerType(in.Body.GranteeType), in.Body.GranteeID, in.Body.Permission, grantedBy.ID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, huma.Error404NotFound("no such " + in.Body.GranteeType)
+		}
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.ShareCreate, ResourceType: "secret", ResourceID: in.ID,
+		Details: map[string]string{"grantee_type": in.Body.GranteeType, "grantee_id": itoa(in.Body.GranteeID), "permission": in.Body.Permission},
+	})
 	return &CreateShareOutput{}, nil
 }
 
@@ -142,6 +152,10 @@ func (h *SharesHandler) Delete(ctx context.Context, in *DeleteShareInput) (*Dele
 	if err := h.shares.Delete(ctx, in.ID, model.OwnerType(in.GranteeType), in.GranteeID); err != nil {
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.ShareDelete, ResourceType: "secret", ResourceID: in.ID,
+		Details: map[string]string{"grantee_type": in.GranteeType, "grantee_id": itoa(in.GranteeID)},
+	})
 	return &DeleteShareOutput{}, nil
 }
 
@@ -157,6 +171,10 @@ func (h *SharesHandler) requireSessionAccess(ctx context.Context, secretID int64
 		return huma.Error500InternalServerError("internal error", err)
 	}
 	if !allowed {
+		audit.Record(ctx, h.audit, audit.Event{
+			Actor: audit.User(user.ID), Action: audit.AccessDenied, ResourceType: "secret", ResourceID: secretID,
+			Details: map[string]string{"permission": permission, "operation": "sharing"},
+		})
 		return huma.Error403Forbidden("you are not authorized to manage sharing for this secret")
 	}
 	return nil

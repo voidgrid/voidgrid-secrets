@@ -5,15 +5,18 @@ first-run setup wizard: **password + TOTP**, or **OIDC**. Automated
 consumers never use either - they use machine tokens (see
 [deployment.md](deployment.md)).
 
-Until setup is complete, every page redirects to `/setup`, and anyone who
-can reach the instance can complete it. Finish setup before exposing the
-instance.
+Until setup is complete, every page redirects to `/setup`. Every setup
+step needs the **setup token** the server prints to its log at startup
+(see [deployment.md](deployment.md#4-finish-first-run-setup)), so only
+someone who can read that log can run it. Wrong tokens are refused (403)
+and recorded in the [audit log](audit-log.md).
 
 ## Password + TOTP
 
 At `/setup`:
 
-1. Create the admin account. Passwords must be at least 14 characters.
+1. Enter the setup token and create the admin account. Passwords must be
+   at least 14 characters.
 2. Scan the QR code with an authenticator app (or enter the secret shown
    beneath it), then confirm with a current code. TOTP is always
    required for password accounts; there is no way to skip it.
@@ -26,6 +29,8 @@ its own TOTP enrollment, shown once.
 
 At `/setup`, choose "configure OIDC" (or go to `/setup/oidc`), then enter:
 
+- **Setup token** - from the server log. It's checked before anything
+  else, including contacting the issuer.
 - **Issuer URL** - exactly as the provider advertises it.
 - **Client ID** and **client secret** - from the client you register with
   the provider.
@@ -101,7 +106,6 @@ private secret - then read it through that token. The token's page also
 shows the names of the secrets it's granted.
 
 Treat admin as full access to everything stored here, and only make
-someone an admin if you'd trust them with every secret. Values a token
-reads through `GET /api/v1/env` (`voidgrid-secrets run` and the agent) are
-recorded in the audit log under that token; reads through the
-single-secret endpoint `GET /api/v1/secrets/{id}` currently aren't.
+someone an admin if you'd trust them with every secret. Every grant an
+admin makes, and every value a token reads, is recorded in the
+[audit log](audit-log.md).

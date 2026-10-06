@@ -9,6 +9,7 @@
 <p class="muted">Enter the current code from your authenticator app.</p>
 {{end}}
 <form class="stack" method="post" action="/setup/confirm">
+    <input type="hidden" name="setup_token" value="{{.SetupToken}}">
     <input type="hidden" name="username" value="{{.Username}}">
     <label>totp code
         <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" required autofocus>

@@ -17,6 +17,14 @@ import (
 // real storage failure without string-matching an error message.
 var ErrUserNotFound = errors.New("storage: user not found")
 
+// ErrNotFound is returned when a write refers to a user, group, token or
+// secret that doesn't exist. Shares, token grants and group memberships
+// check this in the same statement as the insert: SQLite foreign keys
+// can't cover columns that point at either of two tables (a share's
+// grantee is a user or a group), and without the check a grant to an id
+// that doesn't exist yet would take effect for whoever gets that id next.
+var ErrNotFound = errors.New("storage: referenced user, group, token or secret not found")
+
 // UserRepo provides access to the users table. TOTP secrets are encrypted
 // directly with the root key (unlike secrets.go's per-secret DEKs): each
 // user has at most one TOTP secret, so there's no benefit to an extra

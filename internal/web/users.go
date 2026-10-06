@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/totp"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
@@ -14,11 +15,12 @@ import (
 // UsersHandler implements the admin user-management pages.
 type UsersHandler struct {
 	users *storage.UserRepo
+	audit audit.Logger
 }
 
 // NewUsersHandler returns a UsersHandler backed by users.
-func NewUsersHandler(users *storage.UserRepo) *UsersHandler {
-	return &UsersHandler{users: users}
+func NewUsersHandler(users *storage.UserRepo, auditLog audit.Logger) *UsersHandler {
+	return &UsersHandler{users: users, audit: auditLog}
 }
 
 type newUserTOTP struct {
@@ -81,6 +83,10 @@ func (h *UsersHandler) SubmitCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: audit.User(admin.ID), Action: audit.UserCreate, ResourceType: "user", ResourceID: newUser.ID,
+		Details: map[string]string{"username": newUser.Username, "method": "password_totp"},
+	})
 
 	users, err := h.users.List(r.Context())
 	if err != nil {
@@ -111,6 +117,11 @@ func (h *UsersHandler) SubmitSetDisabled(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	action := audit.UserEnable
+	if disabled {
+		action = audit.UserDisable
+	}
+	audit.Record(r.Context(), h.audit, audit.Event{Actor: currentActor(r), Action: action, ResourceType: "user", ResourceID: id})
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 }
 

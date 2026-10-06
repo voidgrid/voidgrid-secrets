@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
@@ -14,11 +15,12 @@ import (
 // TokensHandler implements the admin machine-token management pages.
 type TokensHandler struct {
 	tokens *storage.TokenRepo
+	audit  audit.Logger
 }
 
 // NewTokensHandler returns a TokensHandler backed by tokens.
-func NewTokensHandler(tokens *storage.TokenRepo) *TokensHandler {
-	return &TokensHandler{tokens: tokens}
+func NewTokensHandler(tokens *storage.TokenRepo, auditLog audit.Logger) *TokensHandler {
+	return &TokensHandler{tokens: tokens, audit: auditLog}
 }
 
 type tokensPage struct {
@@ -47,11 +49,15 @@ func (h *TokensHandler) SubmitCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var expiresAt *time.Time
-	plaintext, _, err := h.tokens.Create(r.Context(), r.FormValue("description"), admin.ID, expiresAt)
+	plaintext, mt, err := h.tokens.Create(r.Context(), r.FormValue("description"), admin.ID, expiresAt)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: audit.User(admin.ID), Action: audit.TokenCreate, ResourceType: "token", ResourceID: mt.ID,
+		Details: map[string]string{"description": mt.Description},
+	})
 
 	tokens, err := h.tokens.List(r.Context())
 	if err != nil {
@@ -72,6 +78,7 @@ func (h *TokensHandler) SubmitRevoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{Actor: currentActor(r), Action: audit.TokenRevoke, ResourceType: "token", ResourceID: id})
 	http.Redirect(w, r, "/admin/tokens", http.StatusSeeOther)
 }
 
@@ -170,9 +177,19 @@ func (h *TokensHandler) SubmitAddACL(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, storage.ErrSecretNotFound):
 		h.renderDetail(w, r, id, http.StatusNotFound, "no secret with that id")
 		return
+	case errors.Is(err, storage.ErrNotFound):
+		h.renderDetail(w, r, id, http.StatusNotFound, "no group with that id")
+		return
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: currentActor(r), Action: audit.TokenGrant, ResourceType: "token", ResourceID: id,
+		Details: map[string]string{
+			"resource_type": r.FormValue("resource_type"), "resource_id": strconv.FormatInt(resourceID, 10),
+			"permission": r.FormValue("permission"), "env_name": r.FormValue("env_name"),
+		},
+	})
 	http.Redirect(w, r, "/admin/tokens/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }

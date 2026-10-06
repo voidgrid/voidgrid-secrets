@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/api"
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	oidcclient "github.com/voidgrid/voidgrid-secrets/internal/auth/oidc"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/recoverycode"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
@@ -41,6 +43,15 @@ func runServer(cfg config.Config) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 
+	violations, err := db.ForeignKeyViolations(context.Background())
+	if err != nil {
+		return err
+	}
+	for _, v := range violations {
+		log.Printf("storage: existing row breaks a foreign key (written before enforcement was enabled): %s", v)
+	}
+
+	auditRepo := storage.NewAuditRepo(db)
 	secretRepo := storage.NewSecretRepo(db, rootKey)
 	upgraded, err := secretRepo.UpgradeEncryption(context.Background())
 	if err != nil {
@@ -48,6 +59,10 @@ func runServer(cfg config.Config) error {
 	}
 	if upgraded > 0 {
 		log.Printf("storage: re-encrypted %d secret(s) to bind each to its id", upgraded)
+		audit.Record(context.Background(), auditRepo, audit.Event{
+			Actor: audit.System(), Action: audit.EncryptionUpgraded, ResourceType: "secret",
+			Details: map[string]string{"count": strconv.Itoa(upgraded)},
+		})
 	}
 	shareRepo := storage.NewShareRepo(db)
 	tokenRepo := storage.NewTokenRepo(db)
@@ -55,12 +70,17 @@ func runServer(cfg config.Config) error {
 	groupRepo := storage.NewGroupRepo(db)
 	sessionRepo := storage.NewSessionRepo(db)
 	authConfigRepo := storage.NewAuthConfigRepo(db, rootKey)
-	auditRepo := storage.NewAuditRepo(db)
 	recoveryCodeRepo := storage.NewRecoveryCodeRepo(db)
 
 	oidcProvider := loadOIDCProvider(context.Background(), authConfigRepo)
 
+	setupToken, err := setupTokenIfNeeded(context.Background(), authConfigRepo)
+	if err != nil {
+		return err
+	}
+
 	wizard := &setup.Wizard{
+		SetupToken:            setupToken,
 		Users:                 userRepo,
 		AuthConfig:            authConfigRepo,
 		RecoveryCodes:         recoveryCodeRepo,
@@ -69,6 +89,7 @@ func runServer(cfg config.Config) error {
 		HashPassword:          crypto.HashPassword,
 		GenerateRecoveryCodes: recoverycode.Generate,
 		HashRecoveryCode:      crypto.HashToken,
+		Audit:                 auditRepo,
 	}
 	loginService := &session.LoginService{
 		Users:          userRepo,
@@ -79,6 +100,7 @@ func runServer(cfg config.Config) error {
 		// 10 failures in 15 minutes locks a username out of password and
 		// recovery-code login until the 15 minutes are up.
 		Limiter: session.NewAttemptLimiter(10, 15*time.Minute),
+		Audit:   auditRepo,
 	}
 
 	apiHandler := api.NewRouter(api.Deps{
@@ -86,24 +108,27 @@ func runServer(cfg config.Config) error {
 		TokenAuth:      tokenRepo,
 		SessionAuth:    sessionRepo,
 		SetupHandler:   api.NewSetupHandler(wizard, oidcProvider),
-		AuthHandler:    api.NewAuthHandler(loginService, sessionRepo),
-		SecretsHandler: api.NewSecretsHandler(secretRepo),
+		AuthHandler:    api.NewAuthHandler(loginService, sessionRepo, auditRepo),
+		SecretsHandler: api.NewSecretsHandler(secretRepo, auditRepo),
 		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, auditRepo),
-		SharesHandler:  api.NewSharesHandler(secretRepo, shareRepo),
-		UsersHandler:   api.NewUsersHandler(userRepo),
-		GroupsHandler:  api.NewGroupsHandler(groupRepo),
-		TokensHandler:  api.NewTokensHandler(tokenRepo),
+		SharesHandler:  api.NewSharesHandler(secretRepo, shareRepo, auditRepo),
+		UsersHandler:   api.NewUsersHandler(userRepo, auditRepo),
+		GroupsHandler:  api.NewGroupsHandler(groupRepo, auditRepo),
+		TokensHandler:  api.NewTokensHandler(tokenRepo, auditRepo),
+		AuditHandler:   api.NewAuditHandler(auditRepo),
+		Audit:          auditRepo,
 	})
 
 	webHandler := web.NewRouter(web.Deps{
 		SetupChecker: authConfigRepo,
 		SessionAuth:  sessionRepo,
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
-		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, recoveryCodeRepo),
+		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, recoveryCodeRepo, auditRepo),
 		Secrets:      web.NewSecretsHandler(secretRepo, shareRepo, auditRepo),
-		Users:        web.NewUsersHandler(userRepo),
-		Groups:       web.NewGroupsHandler(groupRepo),
-		Tokens:       web.NewTokensHandler(tokenRepo),
+		Users:        web.NewUsersHandler(userRepo, auditRepo),
+		Groups:       web.NewGroupsHandler(groupRepo, auditRepo),
+		Tokens:       web.NewTokensHandler(tokenRepo, auditRepo),
+		Audit:        web.NewAuditHandler(auditRepo),
 	})
 
 	root := chi.NewMux()
@@ -119,8 +144,10 @@ func runServer(cfg config.Config) error {
 
 	fmt.Printf("voidgrid-secrets listening on %s\n", cfg.ListenAddr)
 	srv := &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: root,
+		Addr: cfg.ListenAddr,
+		// audit.Middleware attaches the client address to every audit
+		// entry recorded while handling a request.
+		Handler: audit.Middleware(root),
 		// Bound how long a client can hold a connection without finishing
 		// a request (slowloris). Every request here is small and quick.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -138,6 +165,27 @@ func runServer(cfg config.Config) error {
 // must still start and serve recovery-code login either way - that's the
 // entire point of recovery codes existing. The provider can also be set
 // later, directly, by a successful SetupOIDC call.
+// setupTokenIfNeeded generates the one-time setup token while setup is
+// incomplete and prints it to the log, which only the operator can read.
+// The setup wizard refuses every step without it. It lives only in this
+// process: a restart prints a new one.
+func setupTokenIfNeeded(ctx context.Context, authConfigRepo *storage.AuthConfigRepo) (string, error) {
+	complete, err := authConfigRepo.IsComplete(ctx)
+	if err != nil {
+		return "", fmt.Errorf("check setup status: %w", err)
+	}
+	if complete {
+		return "", nil
+	}
+	token, err := crypto.GenerateOpaqueToken("vgs_setup_")
+	if err != nil {
+		return "", fmt.Errorf("generate setup token: %w", err)
+	}
+	log.Printf("setup is not complete. Open /setup in a browser and enter this setup token (valid until this server restarts):")
+	log.Printf("setup token: %s", token)
+	return token, nil
+}
+
 func loadOIDCProvider(ctx context.Context, authConfigRepo *storage.AuthConfigRepo) *oidcclient.Provider {
 	provider := &oidcclient.Provider{}
 

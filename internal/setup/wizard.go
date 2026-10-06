@@ -5,8 +5,10 @@ package setup
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
@@ -23,6 +25,11 @@ var ErrAdminPending = errors.New("setup: an admin account is already pending TOT
 // ErrInvalidCode is returned by ConfirmPasswordSetup when the supplied TOTP
 // code doesn't validate against the account's enrolled secret.
 var ErrInvalidCode = errors.New("setup: invalid TOTP code")
+
+// ErrInvalidSetupToken is returned by every setup step when the setup
+// token supplied doesn't match the one this server printed to its log at
+// startup.
+var ErrInvalidSetupToken = errors.New("setup: invalid setup token - use the one printed in the server log")
 
 // UserStore is the subset of user storage the wizard needs.
 type UserStore interface {
@@ -60,6 +67,25 @@ type Wizard struct {
 	// HashRecoveryCode hashes a single plaintext recovery code for
 	// storage (see internal/crypto.HashToken).
 	HashRecoveryCode func(code string) string
+	// SetupToken is generated at startup while setup is incomplete and
+	// printed only to the server's log, so only someone who can read that
+	// log - the operator - can run setup. Every setup step requires it;
+	// if it's empty, setup is refused outright.
+	SetupToken string
+	// Audit records setup attempts and their outcome. nil records nothing.
+	Audit audit.Logger
+}
+
+// CheckSetupToken reports whether token is this server's setup token,
+// recording a rejection in the audit log. Handlers call it before doing
+// any other work for a setup request (OIDC setup contacts the issuer URL
+// it's given), and every Wizard step checks it again.
+func (w *Wizard) CheckSetupToken(ctx context.Context, token string) error {
+	if w.SetupToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(w.SetupToken)) != 1 {
+		audit.Record(ctx, w.Audit, audit.Event{Actor: audit.Anonymous(), Action: audit.SetupTokenRejected, ResourceType: "setup"})
+		return ErrInvalidSetupToken
+	}
+	return nil
 }
 
 // IsComplete reports whether setup has already run.
@@ -72,7 +98,10 @@ func (w *Wizard) IsComplete(ctx context.Context) (bool, error) {
 // URI to show the admin (as a QR code). Setup is not yet complete after
 // this call: the admin must prove possession of the secret by calling
 // ConfirmPasswordSetup with a valid code.
-func (w *Wizard) InitPasswordSetup(ctx context.Context, username, password string) (secret, provisioningURI string, err error) {
+func (w *Wizard) InitPasswordSetup(ctx context.Context, setupToken, username, password string) (secret, provisioningURI string, err error) {
+	if err := w.CheckSetupToken(ctx, setupToken); err != nil {
+		return "", "", err
+	}
 	complete, err := w.AuthConfig.IsComplete(ctx)
 	if err != nil {
 		return "", "", err
@@ -109,6 +138,10 @@ func (w *Wizard) InitPasswordSetup(ctx context.Context, username, password strin
 		return "", "", err
 	}
 
+	audit.Record(ctx, w.Audit, audit.Event{
+		Actor: audit.Anonymous(), Action: audit.SetupAdminCreated, ResourceType: "user", ResourceID: user.ID,
+		Details: map[string]string{"username": username},
+	})
 	return secret, provisioningURI, nil
 }
 
@@ -116,7 +149,10 @@ func (w *Wizard) InitPasswordSetup(ctx context.Context, username, password strin
 // enrolled TOTP secret and, if valid, marks setup as complete and issues
 // a fresh batch of recovery codes - shown to the admin exactly once here,
 // since only the hash is ever stored.
-func (w *Wizard) ConfirmPasswordSetup(ctx context.Context, username, code string) (recoveryCodes []string, err error) {
+func (w *Wizard) ConfirmPasswordSetup(ctx context.Context, setupToken, username, code string) (recoveryCodes []string, err error) {
+	if err := w.CheckSetupToken(ctx, setupToken); err != nil {
+		return nil, err
+	}
 	complete, err := w.AuthConfig.IsComplete(ctx)
 	if err != nil {
 		return nil, err
@@ -152,6 +188,10 @@ func (w *Wizard) ConfirmPasswordSetup(ctx context.Context, username, code string
 		return nil, err
 	}
 
+	audit.Record(ctx, w.Audit, audit.Event{
+		Actor: audit.User(rec.ID), Action: audit.SetupCompleted, ResourceType: "setup",
+		Details: map[string]string{"method": "password_totp"},
+	})
 	return codes, nil
 }
 
@@ -161,7 +201,10 @@ func (w *Wizard) ConfirmPasswordSetup(ctx context.Context, username, code string
 // promoted to admin) are provisioned just-in-time on their first
 // successful login, which is the earliest point a user row - and so
 // somewhere to attach recovery codes - exists.
-func (w *Wizard) SetupOIDC(ctx context.Context, issuer, clientID, clientSecret, redirectURI string) error {
+func (w *Wizard) SetupOIDC(ctx context.Context, setupToken, issuer, clientID, clientSecret, redirectURI string) error {
+	if err := w.CheckSetupToken(ctx, setupToken); err != nil {
+		return err
+	}
 	complete, err := w.AuthConfig.IsComplete(ctx)
 	if err != nil {
 		return err
@@ -170,5 +213,12 @@ func (w *Wizard) SetupOIDC(ctx context.Context, issuer, clientID, clientSecret, 
 		return ErrAlreadyComplete
 	}
 
-	return w.AuthConfig.CompleteOIDC(ctx, issuer, clientID, clientSecret, redirectURI)
+	if err := w.AuthConfig.CompleteOIDC(ctx, issuer, clientID, clientSecret, redirectURI); err != nil {
+		return err
+	}
+	audit.Record(ctx, w.Audit, audit.Event{
+		Actor: audit.Anonymous(), Action: audit.SetupCompleted, ResourceType: "setup",
+		Details: map[string]string{"method": "oidc", "issuer": issuer},
+	})
+	return nil
 }

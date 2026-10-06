@@ -13,7 +13,7 @@
         {{if .User}}
         <nav>
             <a href="/secrets">secrets</a>
-            {{if .User.IsAdmin}}<a href="/admin/users">users</a><a href="/admin/groups">groups</a><a href="/admin/tokens">tokens</a>{{end}}
+            {{if .User.IsAdmin}}<a href="/admin/users">users</a><a href="/admin/groups">groups</a><a href="/admin/tokens">tokens</a><a href="/admin/audit">audit</a>{{end}}
             <span class="muted">{{.User.Username}}</span>
             <form class="inline-form" method="post" action="/logout"><button type="submit">logout</button></form>
         </nav>

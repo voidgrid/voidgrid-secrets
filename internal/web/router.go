@@ -19,6 +19,7 @@ type Deps struct {
 	Users        *UsersHandler
 	Groups       *GroupsHandler
 	Tokens       *TokensHandler
+	Audit        *AuditHandler
 }
 
 // NewRouter builds the web UI's router: the setup wizard (reachable only
@@ -83,6 +84,8 @@ func NewRouter(deps Deps) http.Handler {
 				r.Get("/admin/tokens/{id}", deps.Tokens.Detail)
 				r.Post("/admin/tokens/{id}/revoke", deps.Tokens.SubmitRevoke)
 				r.Post("/admin/tokens/{id}/acls", deps.Tokens.SubmitAddACL)
+
+				r.Get("/admin/audit", deps.Audit.List)
 			})
 		})
 	})

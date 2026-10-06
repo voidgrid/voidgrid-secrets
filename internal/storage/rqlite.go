@@ -11,6 +11,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/rqlite/gorqlite"
@@ -39,4 +40,25 @@ func Open(addr string) (*DB, error) {
 // Close releases the underlying HTTP client resources.
 func (db *DB) Close() {
 	db.conn.Close()
+}
+
+// ForeignKeyViolations lists rows that break a foreign key, as
+// "table row N -> parent", using SQLite's foreign_key_check. rqlited runs
+// with -fk, so new writes can't create these, but rows written before
+// that was enabled aren't re-checked; the server logs any it finds at
+// startup.
+func (db *DB) ForeignKeyViolations(ctx context.Context) ([]string, error) {
+	qr, err := db.conn.QueryOneContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return nil, fmt.Errorf("storage: foreign key check: %w", err)
+	}
+	var out []string
+	for qr.Next() {
+		row, err := qr.Map()
+		if err != nil {
+			return nil, fmt.Errorf("storage: scan foreign key check: %w", err)
+		}
+		out = append(out, fmt.Sprintf("%v row %v -> %v", row["table"], row["rowid"], row["parent"]))
+	}
+	return out, nil
 }
