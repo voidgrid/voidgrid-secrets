@@ -36,7 +36,11 @@ RUN go mod download
 COPY . .
 RUN go vet ./...
 RUN go test -race ./...
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/voidgrid-secrets ./cmd/voidgrid-secrets
+# VERSION is stamped into the binary (internal/version); the release
+# workflow passes the git tag.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/voidgrid/voidgrid-secrets/internal/version.Version=${VERSION}" \
+    -o /out/voidgrid-secrets ./cmd/voidgrid-secrets
 
 # x86_64 only for now: the rqlite and s6-overlay asset names below are
 # architecture-specific (e.g. "linux-amd64", "x86_64"). Extending this to

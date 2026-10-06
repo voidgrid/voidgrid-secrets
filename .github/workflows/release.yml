@@ -44,6 +44,7 @@ jobs:
             TAGS="$TAGS,$IMAGE:latest,$IMAGE:beta"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -52,3 +53,5 @@ jobs:
           file: deploy/docker/Dockerfile
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.tags.outputs.version }}

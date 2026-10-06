@@ -7,6 +7,7 @@ import (
 
 	"github.com/voidgrid/voidgrid-secrets/internal/config"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
+	"github.com/voidgrid/voidgrid-secrets/internal/version"
 )
 
 func main() {
@@ -20,6 +21,8 @@ func main() {
 		err = runAgent(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "recover":
 		err = runRecover(os.Args[2:])
+	case len(os.Args) > 1 && os.Args[1] == "version":
+		fmt.Println(version.Version)
 	default:
 		err = run()
 	}

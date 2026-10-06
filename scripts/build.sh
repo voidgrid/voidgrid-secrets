@@ -6,6 +6,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/_run.sh"
 
+# Stamped into the binary; see internal/version.
+VERSION="${VERSION:-$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)}"
+
 mkdir -p "$ROOT/.dev/gocache" "$ROOT/.dev/gomodcache" "$ROOT/bin"
 
 run_logged build docker run --rm \
@@ -17,5 +20,5 @@ run_logged build docker run --rm \
   -v "$ROOT/.dev/gocache":/cache/go-build \
   -v "$ROOT/.dev/gomodcache":/cache/gomod \
   golang:1.26-alpine \
-  go build -o bin/voidgrid-secrets ./cmd/voidgrid-secrets
+  go build -ldflags "-X github.com/voidgrid/voidgrid-secrets/internal/version.Version=$VERSION" -o bin/voidgrid-secrets ./cmd/voidgrid-secrets
 exit $?

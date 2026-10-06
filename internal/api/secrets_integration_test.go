@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/voidgrid/voidgrid-secrets/internal/version"
 )
 
 func bearerRequest(t *testing.T, e env, method, path, body, token string) *httptest.ResponseRecorder {
@@ -120,6 +122,14 @@ func TestAPIOpenAPISpecIsServed(t *testing.T) {
 	rec := doJSON(t, e.handler, "GET", "/openapi.json", "", nil)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "/api/v1/secrets") {
 		t.Fatalf("spec: %d", rec.Code)
+	}
+	var spec struct {
+		Info struct {
+			Version string `json:"version"`
+		} `json:"info"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil || spec.Info.Version != strings.TrimPrefix(version.Version, "v") {
+		t.Fatalf("spec version = %q, want the build's version %q (%v)", spec.Info.Version, version.Version, err)
 	}
 }
 

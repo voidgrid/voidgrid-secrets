@@ -22,6 +22,7 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/recovery"
 	"github.com/voidgrid/voidgrid-secrets/internal/setup"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
+	"github.com/voidgrid/voidgrid-secrets/internal/version"
 	"github.com/voidgrid/voidgrid-secrets/internal/web"
 )
 
@@ -124,7 +125,7 @@ func runServer(cfg config.Config) error {
 	root.Handle("/schemas/*", apiHandler)
 	root.Handle("/*", webHandler)
 
-	fmt.Printf("voidgrid-secrets listening on %s\n", cfg.ListenAddr)
+	fmt.Printf("voidgrid-secrets %s listening on %s\n", version.Version, cfg.ListenAddr)
 	srv := &http.Server{
 		Addr: cfg.ListenAddr,
 		// audit.Middleware attaches the client address to every audit

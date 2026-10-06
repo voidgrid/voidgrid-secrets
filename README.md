@@ -1,12 +1,16 @@
 # voidgrid-secrets
 
-<!-- operator's framing goes here -->
+If you've seen my backup project you've seen my explanation of how I'm using Claude for this. While this version is all Claude, I am reading the code and learning Go as I work on this. I wanted something way more simple but still secure for secrets manager than anything I could find so I started working on it. This is a homelab-centric secrets management project for use in my own lab. It is single user and hopefully dead simple to use. Some of the complexity that it has is because Docker doesn't have a [native injection path](https://github.com/docker/compose/pull/14230) as of yet. When it does, I'll refactor this.
+
+voidegrid-secrets does have a real test suite, the encyrption should be solid, and the DB properly designed (I do know a little bit about both of those. If you want to use this then I advise, very strongly, to read the code before trusting it. I am not asking you to trust me at all as I am using Claude, for the love of God dig into the code yourself and understand before running it in your homelab. For all you know running this could get your fridge pregnant, turn your toaster into a Transformer, cause your signicant other to expect you to actually do the dishes, or summon Abraxas in the middle of your bathroom whilst you are showering and I wouldn't want you blaming me for any of that. And for the loved of the gods ***DO NOT*** expose this to the open Internet.
 
 ## Requirements
 
 - Docker - the only thing needed to run, build, or develop this project.
-- A reverse proxy that terminates HTTPS in front of it (Caddy, Traefik,
+- If you decide to ignore my warning and expose this to the internet then this is the bare minimum
+  - A reverse proxy that terminates HTTPS in front of it (Caddy, Traefik,
   nginx): the app serves plain HTTP and its session cookies require HTTPS.
+  - Again, do not fucking do this
 - Optionally, an OIDC identity provider (e.g. Pocket ID) if you'd rather
   not use password + TOTP sign-in.
 

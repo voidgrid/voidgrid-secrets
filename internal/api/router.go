@@ -6,6 +6,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -14,6 +15,7 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/token"
+	"github.com/voidgrid/voidgrid-secrets/internal/version"
 )
 
 // Deps collects everything NewRouter needs to wire up the API.
@@ -56,7 +58,7 @@ type Deps struct {
 func NewRouter(deps Deps) http.Handler {
 	router := chi.NewMux()
 	router.Use(noStore)
-	config := huma.DefaultConfig("voidgrid-secrets API", "0.1.0")
+	config := huma.DefaultConfig("voidgrid-secrets API", strings.TrimPrefix(version.Version, "v"))
 	humaAPI := humachi.New(router, config)
 	humaAPI.UseMiddleware(setupGateMiddleware(humaAPI, deps.SetupChecker))
 
