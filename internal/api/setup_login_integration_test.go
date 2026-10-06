@@ -48,10 +48,10 @@ func TestWizardLocksOutLoginUntilSetupComplete(t *testing.T) {
 	}
 }
 
-func TestWizardLocksOutAdminUntilSetupComplete(t *testing.T) {
+func TestWizardLocksOutTokensUntilSetupComplete(t *testing.T) {
 	e := newEnv(t, false)
 
-	rec := doJSON(t, e.handler, http.MethodGet, "/api/v1/admin/users", "", nil)
+	rec := doJSON(t, e.handler, http.MethodGet, "/api/v1/tokens", "", nil)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
@@ -134,13 +134,13 @@ func TestFullSetupAndLoginFlow(t *testing.T) {
 		t.Fatalf("expected Set-Cookie to contain %s=, got %q", gosession.CookieName, setCookie)
 	}
 
-	// The now-admin user can reach the admin routes.
+	// The account can now manage tokens.
 	cookieParts := strings.SplitN(strings.TrimPrefix(setCookie, gosession.CookieName+"="), ";", 2)
 	sessionCookie := &http.Cookie{Name: gosession.CookieName, Value: cookieParts[0]} //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
 
-	adminRec := doJSON(t, e.handler, http.MethodGet, "/api/v1/admin/users", "", sessionCookie)
-	if adminRec.Code != http.StatusOK {
-		t.Fatalf("admin status = %d, want %d; body=%s", adminRec.Code, http.StatusOK, adminRec.Body.String())
+	tokensRec := doJSON(t, e.handler, http.MethodGet, "/api/v1/tokens", "", sessionCookie)
+	if tokensRec.Code != http.StatusOK {
+		t.Fatalf("tokens status = %d, want %d; body=%s", tokensRec.Code, http.StatusOK, tokensRec.Body.String())
 	}
 
 	// Logout clears the cookie.
@@ -175,44 +175,20 @@ func TestLoginRejectsWrongTOTPAfterSetup(t *testing.T) {
 	}
 }
 
-func TestNonAdminSessionCannotReachAdminRoutes(t *testing.T) {
+func TestMachineTokenCannotManageTokens(t *testing.T) {
 	e := newEnv(t, true)
 
-	user, err := e.users.CreateWithPassword(t.Context(), "plain-user", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	sessionToken, _, err := e.sessions.Create(t.Context(), user.ID, gosession.DefaultTTL)
-	if err != nil {
-		t.Fatalf("sessions.Create: %v", err)
-	}
-	sessionCookie := &http.Cookie{Name: gosession.CookieName, Value: sessionToken} //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
-
-	rec := doJSON(t, e.handler, http.MethodGet, "/api/v1/admin/users", "", sessionCookie)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
-	}
-}
-
-func TestMachineTokenCannotReachAdminRoutes(t *testing.T) {
-	e := newEnv(t, true)
-
-	user, err := e.users.CreateWithPassword(t.Context(), "token-owner", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	plaintext, _, err := e.tokens.Create(t.Context(), "some-machine", user.ID, nil)
+	plaintext, _, err := e.tokens.Create(t.Context(), "some-machine", nil)
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tokens", nil)
 	req.Header.Set("Authorization", "Bearer "+plaintext)
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, req)
 
-	// Admin routes are session-only: a bearer token isn't even recognized
-	// as a form of authentication there, so this is 401, not 403.
+	// Token management is session-only: a bearer token isn't even a form
+	// of authentication there, so this is 401, not 403.
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
@@ -232,7 +208,7 @@ func TestSetupRequiresTheSetupToken(t *testing.T) {
 			t.Errorf("%s with wrong token: status = %d, want 403; body=%s", c.path, rec.Code, rec.Body.String())
 		}
 	}
-	if n, err := e.users.CountUsers(context.Background()); err != nil || n != 0 {
-		t.Fatalf("users after refused setup = %d, %v; want 0", n, err)
+	if _, err := e.users.Get(context.Background()); err == nil {
+		t.Fatal("an account exists after refused setup")
 	}
 }

@@ -30,7 +30,7 @@ services:
   # --- Example consumer. Uncomment this block, the voidgrid-bin volume and
   # the secrets block at the bottom.
   #
-  # 1. In the web UI (admin > tokens), create a token for this service and
+  # 1. In the web UI (tokens), create a token for this service and
   #    grant it "read" on each secret it needs, with the environment
   #    variable name the app expects (or leave it blank to derive one).
   # 2. Save the token (shown once) to ./example-consumer-voidgrid-token,

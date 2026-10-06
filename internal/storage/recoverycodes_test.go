@@ -15,9 +15,9 @@ func TestRecoveryCodeRepoConsumeIsSingleUse(t *testing.T) {
 	codes := storage.NewRecoveryCodeRepo(db)
 	ctx := context.Background()
 
-	user, err := users.CreateWithPassword(ctx, "alice", "hashed-password")
+	user, err := users.SetupPassword(ctx, "alice", "hashed-password")
 	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+		t.Fatalf("SetupPassword: %v", err)
 	}
 
 	hash := crypto.HashToken("ABCDE-FGHIJ-KLMNO")
@@ -49,9 +49,9 @@ func TestRecoveryCodeRepoReplaceForUserInvalidatesOldCodes(t *testing.T) {
 	codes := storage.NewRecoveryCodeRepo(db)
 	ctx := context.Background()
 
-	user, err := users.CreateWithPassword(ctx, "alice", "hashed-password")
+	user, err := users.SetupPassword(ctx, "alice", "hashed-password")
 	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+		t.Fatalf("SetupPassword: %v", err)
 	}
 
 	oldHash := crypto.HashToken("old-code")
@@ -79,9 +79,9 @@ func TestRecoveryCodeRepoConsumeRejectsUnknownCode(t *testing.T) {
 	codes := storage.NewRecoveryCodeRepo(db)
 	ctx := context.Background()
 
-	user, err := users.CreateWithPassword(ctx, "alice", "hashed-password")
+	user, err := users.SetupPassword(ctx, "alice", "hashed-password")
 	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+		t.Fatalf("SetupPassword: %v", err)
 	}
 
 	ok, err := codes.Consume(ctx, user.ID, crypto.HashToken("never-issued"))

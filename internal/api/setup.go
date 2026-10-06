@@ -186,8 +186,8 @@ func mapSetupErr(err error) error {
 		return huma.Error403Forbidden("invalid setup token - use the one printed in the server log at startup")
 	case errors.Is(err, setup.ErrAlreadyComplete):
 		return huma.Error409Conflict("setup already completed", err)
-	case errors.Is(err, setup.ErrAdminPending):
-		return huma.Error409Conflict("an admin account is already pending confirmation", err)
+	case errors.Is(err, setup.ErrNotStarted):
+		return huma.Error409Conflict("start setup from the beginning", err)
 	case errors.Is(err, setup.ErrInvalidCode):
 		return huma.Error400BadRequest("invalid TOTP code", err)
 	default:

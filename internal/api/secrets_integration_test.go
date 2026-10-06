@@ -8,291 +8,144 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
-	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
-func TestAPIRevealRequiresValidToken(t *testing.T) {
-	e := newEnv(t, true)
-	ctx := context.Background()
-
-	owner, err := e.users.CreateWithPassword(ctx, "api-test-user", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	created, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "db-password", []byte("hunter2"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/secrets/%d", created.ID), nil)
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
-	}
-}
-
-func TestAPIRevealRequiresReadACL(t *testing.T) {
-	e := newEnv(t, true)
-	ctx := context.Background()
-
-	owner, err := e.users.CreateWithPassword(ctx, "api-test-user", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	created, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "db-password", []byte("hunter2"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	plaintext, _, err := e.tokens.Create(ctx, "no-acl-token", owner.ID, nil)
-	if err != nil {
-		t.Fatalf("tokens.Create: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/secrets/%d", created.ID), nil)
-	req.Header.Set("Authorization", "Bearer "+plaintext)
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
-	}
-}
-
-func TestAPIRevealSucceedsWithACL(t *testing.T) {
-	e := newEnv(t, true)
-	ctx := context.Background()
-
-	owner, err := e.users.CreateWithPassword(ctx, "api-test-user", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	created, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "db-password", []byte("hunter2"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	plaintext, mt, err := e.tokens.Create(ctx, "reader", owner.ID, nil)
-	if err != nil {
-		t.Fatalf("tokens.Create: %v", err)
-	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "read", ""); err != nil {
-		t.Fatalf("AddACL: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/secrets/%d", created.ID), nil)
-	req.Header.Set("Authorization", "Bearer "+plaintext)
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	var body struct {
-		Value string `json:"value"`
-	}
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body.Value != "hunter2" {
-		t.Fatalf("got value %q, want %q", body.Value, "hunter2")
-	}
-}
-
-func TestAPIUpdateRequiresWriteNotReadACL(t *testing.T) {
-	e := newEnv(t, true)
-	ctx := context.Background()
-
-	owner, err := e.users.CreateWithPassword(ctx, "api-test-user", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	created, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "db-password", []byte("hunter2"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	plaintext, mt, err := e.tokens.Create(ctx, "read-only", owner.ID, nil)
-	if err != nil {
-		t.Fatalf("tokens.Create: %v", err)
-	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "read", ""); err != nil {
-		t.Fatalf("AddACL: %v", err)
-	}
-
-	body := strings.NewReader(`{"value":"new-value"}`)
-	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/secrets/%d", created.ID), body)
-	req.Header.Set("Authorization", "Bearer "+plaintext)
+func bearerRequest(t *testing.T, e env, method, path, body, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, req)
+	return rec
+}
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+// A token reaches only what it's granted: read grants read, write grants
+// read and update, and nothing grants listing, creating, renaming or
+// deleting.
+func TestTokenAccessFollowsGrants(t *testing.T) {
+	e := newEnv(t, true)
+	ctx := context.Background()
+	readable, err := e.secrets.Create(ctx, "readable", []byte("r-value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writable, err := e.secrets.Create(ctx, "writable", []byte("w-value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := e.secrets.Create(ctx, "other", []byte("not-granted"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, mt, err := e.tokens.Create(ctx, "svc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.tokens.AddGrant(ctx, mt.ID, readable.ID, "read", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.tokens.AddGrant(ctx, mt.ID, writable.ID, "write", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name, method, path, body string
+		want                     int
+	}{
+		{"read granted", "GET", fmt.Sprintf("/api/v1/secrets/%d", readable.ID), "", 200},
+		{"read via write grant", "GET", fmt.Sprintf("/api/v1/secrets/%d", writable.ID), "", 200},
+		{"read ungranted", "GET", fmt.Sprintf("/api/v1/secrets/%d", other.ID), "", 403},
+		{"update with read grant", "PUT", fmt.Sprintf("/api/v1/secrets/%d", readable.ID), `{"value":"x"}`, 403},
+		{"update with write grant", "PUT", fmt.Sprintf("/api/v1/secrets/%d", writable.ID), `{"value":"rotated"}`, 200},
+		{"list", "GET", "/api/v1/secrets", "", 403},
+		{"create", "POST", "/api/v1/secrets", `{"name":"n","value":"v"}`, 403},
+		{"rename", "PUT", fmt.Sprintf("/api/v1/secrets/%d/name", writable.ID), `{"name":"renamed"}`, 403},
+		{"delete", "DELETE", fmt.Sprintf("/api/v1/secrets/%d", writable.ID), "", 403},
+		{"manage tokens", "GET", "/api/v1/tokens", "", 401},
+	}
+	for _, c := range cases {
+		if rec := bearerRequest(t, e, c.method, c.path, c.body, token); rec.Code != c.want {
+			t.Errorf("%s: status = %d, want %d; body=%s", c.name, rec.Code, c.want, rec.Body.String())
+		}
+	}
+	if got, _ := e.secrets.Reveal(ctx, writable.ID); string(got) != "rotated" {
+		t.Fatalf("write grant didn't update the value: %q", got)
+	}
+	if rec := bearerRequest(t, e, "GET", fmt.Sprintf("/api/v1/secrets/%d", readable.ID), "", "vgs_bogus"); rec.Code != 401 {
+		t.Fatalf("bogus token: %d", rec.Code)
 	}
 }
 
-func TestAPIUpdateSucceedsWithWriteACLAndRotatesValue(t *testing.T) {
+// The signed-in account can do everything to a secret.
+func TestOwnerSecretLifecycleOverAPI(t *testing.T) {
 	e := newEnv(t, true)
-	ctx := context.Background()
+	cookie := ownerCookie(t, e)
 
-	owner, err := e.users.CreateWithPassword(ctx, "api-test-user", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	rec := doJSON(t, e.handler, "POST", "/api/v1/secrets", `{"name":"db-password","value":"v1"}`, cookie)
+	var created struct {
+		ID int64 `json:"id"`
 	}
-	created, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "db-password", []byte("hunter2"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
+	if rec.Code != 200 || json.NewDecoder(rec.Body).Decode(&created) != nil {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
-
-	plaintext, mt, err := e.tokens.Create(ctx, "writer", owner.ID, nil)
-	if err != nil {
-		t.Fatalf("tokens.Create: %v", err)
+	if rec := doJSON(t, e.handler, "POST", "/api/v1/secrets", `{"name":"db-password","value":"x"}`, cookie); rec.Code != 409 {
+		t.Fatalf("duplicate name: %d", rec.Code)
 	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", created.ID, "write", ""); err != nil {
-		t.Fatalf("AddACL: %v", err)
+	base := fmt.Sprintf("/api/v1/secrets/%d", created.ID)
+	if rec := doJSON(t, e.handler, "PUT", base, `{"value":"v2"}`, cookie); rec.Code != 200 {
+		t.Fatalf("update: %d", rec.Code)
 	}
-
-	body := strings.NewReader(`{"value":"rotated-value"}`)
-	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/secrets/%d", created.ID), body)
-	req.Header.Set("Authorization", "Bearer "+plaintext)
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	if rec := doJSON(t, e.handler, "PUT", base+"/name", `{"name":"pg-password"}`, cookie); rec.Code != 200 {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body.String())
 	}
-
-	revealed, err := e.secrets.Reveal(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("Reveal: %v", err)
+	rec = doJSON(t, e.handler, "GET", base, "", cookie)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"v2"`) {
+		t.Fatalf("reveal: %d %s", rec.Code, rec.Body.String())
 	}
-	if string(revealed) != "rotated-value" {
-		t.Fatalf("got revealed value %q, want %q", revealed, "rotated-value")
+	rec = doJSON(t, e.handler, "GET", "/api/v1/secrets", "", cookie)
+	if !strings.Contains(rec.Body.String(), "pg-password") || strings.Contains(rec.Body.String(), "v2") {
+		t.Fatalf("list should show names, never values: %s", rec.Body.String())
 	}
-}
-
-func TestAPIRevealSucceedsWithSessionOwnership(t *testing.T) {
-	e := newEnv(t, true)
-	ctx := context.Background()
-
-	owner, err := e.users.CreateWithPassword(ctx, "session-owner", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	if rec := doJSON(t, e.handler, "DELETE", base, "", cookie); rec.Code >= 300 {
+		t.Fatalf("delete: %d", rec.Code)
 	}
-	created, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "db-password", []byte("hunter2"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	sessionToken, _, err := e.sessions.Create(ctx, owner.ID, gosession.DefaultTTL)
-	if err != nil {
-		t.Fatalf("sessions.Create: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/secrets/%d", created.ID), nil)
-	req.AddCookie(&http.Cookie{Name: gosession.CookieName, Value: sessionToken}) //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-}
-
-func TestAPIRevealDeniedForUnrelatedSessionUser(t *testing.T) {
-	e := newEnv(t, true)
-	ctx := context.Background()
-
-	owner, err := e.users.CreateWithPassword(ctx, "session-owner-2", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	stranger, err := e.users.CreateWithPassword(ctx, "session-stranger", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	created, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "db-password", []byte("hunter2"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	sessionToken, _, err := e.sessions.Create(ctx, stranger.ID, gosession.DefaultTTL)
-	if err != nil {
-		t.Fatalf("sessions.Create: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/secrets/%d", created.ID), nil)
-	req.AddCookie(&http.Cookie{Name: gosession.CookieName, Value: sessionToken}) //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	if rec := doJSON(t, e.handler, "GET", base, "", cookie); rec.Code != 404 {
+		t.Fatalf("after delete: %d", rec.Code)
 	}
 }
 
 func TestAPIOpenAPISpecIsServed(t *testing.T) {
 	e := newEnv(t, true)
-
-	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if !strings.Contains(rec.Body.String(), "voidgrid-secrets API") {
-		t.Fatalf("expected OpenAPI spec to mention the API title, body: %s", rec.Body.String())
+	rec := doJSON(t, e.handler, "GET", "/openapi.json", "", nil)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "/api/v1/secrets") {
+		t.Fatalf("spec: %d", rec.Code)
 	}
 }
 
 func TestAPIRefusesCrossOriginSessionRequests(t *testing.T) {
 	e := newEnv(t, true)
 	ctx := context.Background()
-
-	admin, err := e.users.CreateWithPassword(ctx, "coop-admin", "x")
+	cookie := ownerCookie(t, e)
+	_, mt, err := e.tokens.Create(ctx, "victim", nil)
 	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+		t.Fatal(err)
 	}
-	if err := e.users.PromoteToAdmin(ctx, admin.ID); err != nil {
-		t.Fatalf("PromoteToAdmin: %v", err)
-	}
-	sessionToken, _, err := e.sessions.Create(ctx, admin.ID, gosession.DefaultTTL)
-	if err != nil {
-		t.Fatalf("sessions.Create: %v", err)
-	}
-	_, mt, err := e.tokens.Create(ctx, "victim", admin.ID, nil)
-	if err != nil {
-		t.Fatalf("tokens.Create: %v", err)
-	}
-
 	revoke := func(fetchSite string) int {
-		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/admin/tokens/%d/revoke", mt.ID), nil)
-		req.AddCookie(&http.Cookie{Name: gosession.CookieName, Value: sessionToken}) //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/tokens/%d/revoke", mt.ID), nil)
+		req.AddCookie(cookie)
 		req.Header.Set("Sec-Fetch-Site", fetchSite)
 		rec := httptest.NewRecorder()
 		e.handler.ServeHTTP(rec, req)
 		return rec.Code
 	}
-
 	if code := revoke("same-site"); code != http.StatusForbidden {
-		t.Fatalf("same-site revoke: status = %d, want 403", code)
+		t.Fatalf("same-site revoke: %d, want 403", code)
 	}
-	tokens, err := e.tokens.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(tokens) != 1 || tokens[0].RevokedAt != nil {
-		t.Fatal("token was revoked by a refused cross-origin request")
+	if got, _ := e.tokens.Get(ctx, mt.ID); got.RevokedAt != nil {
+		t.Fatal("token revoked by a refused cross-origin request")
 	}
 	if code := revoke("same-origin"); code >= 300 {
-		t.Fatalf("same-origin revoke: status = %d, want success", code)
+		t.Fatalf("same-origin revoke: %d", code)
 	}
 }

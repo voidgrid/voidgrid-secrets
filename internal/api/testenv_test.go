@@ -15,6 +15,7 @@ import (
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	gototp "github.com/voidgrid/voidgrid-secrets/internal/auth/totp"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
+	"github.com/voidgrid/voidgrid-secrets/internal/recovery"
 	"github.com/voidgrid/voidgrid-secrets/internal/setup"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
@@ -29,11 +30,11 @@ type env struct {
 	db             *storage.DB
 	rootKey        []byte
 	secrets        *storage.SecretRepo
-	shares         *storage.ShareRepo
 	tokens         *storage.TokenRepo
 	users          *storage.UserRepo
-	groups         *storage.GroupRepo
 	sessions       *storage.SessionRepo
+	recoveryCodes  *storage.RecoveryCodeRepo
+	recovery       *recovery.Service
 	authConfigRepo *storage.AuthConfigRepo
 	// baseURL is the test rqlited's HTTP address, for assertions that
 	// query tables directly (e.g. audit_log).
@@ -83,10 +84,8 @@ func newEnv(t *testing.T, completeSetup bool) env {
 
 	rootKey := make([]byte, crypto.KeySize)
 	secretRepo := storage.NewSecretRepo(db, rootKey)
-	shareRepo := storage.NewShareRepo(db)
 	tokenRepo := storage.NewTokenRepo(db)
 	userRepo := storage.NewUserRepo(db, rootKey)
-	groupRepo := storage.NewGroupRepo(db)
 	sessionRepo := storage.NewSessionRepo(db)
 	authConfigRepo := storage.NewAuthConfigRepo(db, rootKey)
 	recoveryCodeRepo := storage.NewRecoveryCodeRepo(db)
@@ -119,6 +118,11 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		ValidateTOTP:   gototp.Validate,
 	}
 
+	recoveryService := &recovery.Service{
+		Users: userRepo, Resets: storage.NewResetRepo(db, rootKey), RecoveryCodes: recoveryCodeRepo, Sessions: sessionRepo,
+		GenerateTOTP: gototp.Generate, ValidateTOTP: gototp.Validate, HashPassword: crypto.HashPassword, Audit: auditRepo,
+	}
+
 	handler := api.NewRouter(api.Deps{
 		SetupChecker:   authConfigRepo,
 		TokenAuth:      tokenRepo,
@@ -127,9 +131,7 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		AuthHandler:    api.NewAuthHandler(loginService, sessionRepo, auditRepo),
 		SecretsHandler: api.NewSecretsHandler(secretRepo, auditRepo),
 		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, auditRepo),
-		SharesHandler:  api.NewSharesHandler(secretRepo, shareRepo, auditRepo),
-		UsersHandler:   api.NewUsersHandler(userRepo, auditRepo),
-		GroupsHandler:  api.NewGroupsHandler(groupRepo, auditRepo),
+		RecoverHandler: api.NewRecoverHandler(recoveryService),
 		TokensHandler:  api.NewTokensHandler(tokenRepo, auditRepo),
 		AuditHandler:   api.NewAuditHandler(auditRepo),
 		Audit:          auditRepo,
@@ -140,11 +142,11 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		db:             db,
 		rootKey:        rootKey,
 		secrets:        secretRepo,
-		shares:         shareRepo,
 		tokens:         tokenRepo,
 		users:          userRepo,
-		groups:         groupRepo,
 		sessions:       sessionRepo,
+		recoveryCodes:  recoveryCodeRepo,
+		recovery:       recoveryService,
 		authConfigRepo: authConfigRepo,
 		baseURL:        baseURL,
 	}
@@ -175,3 +177,33 @@ func waitForReady(t *testing.T, baseURL string) {
 	}
 	t.Fatalf("rqlited at %s did not become ready in time", baseURL)
 }
+
+// ownerCookie creates the account (password+TOTP, already enrolled) if it
+// doesn't exist, and returns a session cookie for it.
+func ownerCookie(t *testing.T, e env) *http.Cookie {
+	t.Helper()
+	ctx := context.Background()
+	user, err := e.users.Get(ctx)
+	if err != nil {
+		hash, herr := crypto.HashPassword(ownerPassword)
+		if herr != nil {
+			t.Fatal(herr)
+		}
+		if user, err = e.users.SetupPassword(ctx, "owner", hash); err != nil {
+			t.Fatalf("SetupPassword: %v", err)
+		}
+		if err := e.users.SetTOTPSecret(ctx, ownerTOTPSecret); err != nil {
+			t.Fatal(err)
+		}
+	}
+	token, _, err := e.sessions.Create(ctx, user.ID, gosession.DefaultTTL)
+	if err != nil {
+		t.Fatalf("sessions.Create: %v", err)
+	}
+	return &http.Cookie{Name: gosession.CookieName, Value: token} //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
+}
+
+const (
+	ownerPassword   = "correct horse battery staple" //nolint:gosec // fake test fixture, not a real credential
+	ownerTOTPSecret = "JBSWY3DPEHPK3PXP"             //nolint:gosec // fake test fixture, not a real credential
+)

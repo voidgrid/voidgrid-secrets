@@ -19,7 +19,7 @@ var ErrInvalidToken = errors.New("token: invalid, expired, or revoked")
 // Authenticator validates a plaintext bearer token and returns the machine
 // token it identifies along with its resource ACLs.
 type Authenticator interface {
-	Authenticate(ctx context.Context, plaintext string) (model.MachineToken, []model.TokenACL, error)
+	Authenticate(ctx context.Context, plaintext string) (model.MachineToken, []model.TokenGrant, error)
 }
 
 type contextKey int
@@ -29,12 +29,12 @@ const authInfoKey contextKey = iota
 // authInfo is what Middleware stashes in the request context on success.
 type authInfo struct {
 	token model.MachineToken
-	acls  []model.TokenACL
+	acls  []model.TokenGrant
 }
 
-// FromContext returns the authenticated machine token and its ACLs stashed
+// FromContext returns the authenticated machine token and its grants stashed
 // by Middleware, if the request was authenticated via a machine token.
-func FromContext(ctx context.Context) (model.MachineToken, []model.TokenACL, bool) {
+func FromContext(ctx context.Context) (model.MachineToken, []model.TokenGrant, bool) {
 	info, ok := ctx.Value(authInfoKey).(authInfo)
 	if !ok {
 		return model.MachineToken{}, nil, false
@@ -43,11 +43,11 @@ func FromContext(ctx context.Context) (model.MachineToken, []model.TokenACL, boo
 }
 
 // WithAuth returns a copy of ctx carrying the authenticated machine token
-// and its ACLs, retrievable later via FromContext. Framework-specific
+// and its grants, retrievable later via FromContext. Framework-specific
 // middleware (net/http, huma, ...) that performs its own request
 // extraction should call this to stash results consistently, so handlers
 // can use FromContext regardless of which middleware authenticated them.
-func WithAuth(ctx context.Context, mt model.MachineToken, acls []model.TokenACL) context.Context {
+func WithAuth(ctx context.Context, mt model.MachineToken, acls []model.TokenGrant) context.Context {
 	return context.WithValue(ctx, authInfoKey, authInfo{token: mt, acls: acls})
 }
 

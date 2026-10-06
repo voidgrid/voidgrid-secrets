@@ -79,10 +79,6 @@ func TestLoginLockoutSkipsPasswordCheck(t *testing.T) {
 	if verifies != 2 {
 		t.Fatalf("password verified %d times, want 2 (none while locked out)", verifies)
 	}
-	// Recovery-code login shares the same lockout.
-	if _, _, err := svc.LoginWithRecoveryCode(ctx, "alice", "any"); !errors.Is(err, session.ErrTooManyAttempts) {
-		t.Fatalf("recovery login: err = %v, want ErrTooManyAttempts", err)
-	}
 }
 
 func TestLoginVerifiesPasswordEvenForUnknownUsers(t *testing.T) {

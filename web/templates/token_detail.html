@@ -1,44 +1,27 @@
 {{define "content"}}
 <h1>token #{{.Token.ID}}</h1>
-<p class="muted">{{.Token.Description}}</p>
+<p class="muted">{{.Token.Description}}{{if .Token.RevokedAt}} - revoked{{end}}</p>
 
 <h2>secrets this token can read</h2>
-{{if .SecretGrants}}
+{{if .Grants}}
 <table>
-    <thead><tr><th>secret</th><th>id</th><th>permission</th><th>environment variable</th></tr></thead>
-    <tbody>
-    {{range .SecretGrants}}
-    <tr><td>{{.SecretName}}</td><td>{{.SecretID}}</td><td>{{.Permission}}</td><td><code>{{.EnvName}}</code></td></tr>
+    <tr><th>secret</th><th>permission</th><th>environment variable</th></tr>
+    {{range .Grants}}
+    <tr><td><a href="/secrets/{{.SecretID}}">{{.SecretName}}</a></td><td>{{.Permission}}</td><td><code>{{.EffectiveEnvName}}</code>{{if not .EnvName}} <span class="muted">(derived)</span>{{end}}</td></tr>
     {{end}}
-    </tbody>
 </table>
-<p class="muted"><code>voidgrid-secrets run</code> exposes each secret under its environment variable name.</p>
+<p class="muted"><code>voidgrid-secrets run</code> and the agent expose each secret under its environment variable name.</p>
 {{else}}
 <p class="muted">none yet</p>
 {{end}}
 
-{{if .GroupGrants}}
-<h2>group grants</h2>
-<table>
-    <thead><tr><th>group id</th><th>permission</th></tr></thead>
-    <tbody>
-    {{range .GroupGrants}}
-    <tr><td>{{.ResourceID}}</td><td>{{.Permission}}</td></tr>
-    {{end}}
-    </tbody>
-</table>
-{{end}}
-
-<h2>grant access</h2>
-<form class="stack" method="post" action="/admin/tokens/{{.Token.ID}}/acls">
-    <label>resource type
-        <select name="resource_type">
-            <option value="secret">secret</option>
-            <option value="group">group</option>
+<h2>grant a secret</h2>
+{{if .Secrets}}
+<form class="stack" method="post" action="/tokens/{{.Token.ID}}/grants">
+    <label>secret
+        <select name="secret_id" required>
+            {{range .Secrets}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
         </select>
-    </label>
-    <label>resource id
-        <input type="number" name="resource_id" required>
     </label>
     <label>permission
         <select name="permission">
@@ -46,10 +29,14 @@
             <option value="write">write</option>
         </select>
     </label>
-    <label>environment variable name (secrets only, optional)
+    <label>environment variable name (optional)
         <input type="text" name="env_name" pattern="[A-Z_][A-Z0-9_]*" placeholder="derived from the secret name if blank">
     </label>
     <button type="submit">grant</button>
 </form>
-<div class="actions"><a href="/admin/tokens">back to tokens</a></div>
+<p class="muted">Granting a secret the token already has replaces its permission and name.</p>
+{{else}}
+<p class="muted"><a href="/secrets/new">create a secret</a> first</p>
+{{end}}
+<div class="actions"><a href="/tokens">back to tokens</a> <a href="/audit?token_id={{.Token.ID}}">audit trail</a></div>
 {{end}}

@@ -1,0 +1,11 @@
+{{define "content"}}
+<h1>recover your account</h1>
+<p class="muted">Enter one of your recovery codes, or a code from <code>voidgrid-secrets recover</code> run inside the container. You'll set a new password and authenticator, get new recovery codes, and every session will be signed out.</p>
+<form class="stack" method="post" action="/recover">
+    <label>code
+        <input type="text" name="code" autocomplete="off" required autofocus>
+    </label>
+    <button type="submit">continue</button>
+</form>
+<p class="muted">— or <a href="/login">back to sign in</a> —</p>
+{{end}}

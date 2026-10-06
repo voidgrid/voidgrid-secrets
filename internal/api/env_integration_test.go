@@ -12,7 +12,6 @@ import (
 	"github.com/rqlite/gorqlite"
 
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
-	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
 type envResponse struct {
@@ -63,31 +62,30 @@ func TestEnvReturnsGrantedSecretsWithNamesAndAudits(t *testing.T) {
 	e := newEnv(t, true)
 	ctx := context.Background()
 
-	owner, err := e.users.CreateWithPassword(ctx, "env-owner", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	if _, err := e.users.SetupPassword(ctx, "env-owner", "x"); err != nil {
+		t.Fatalf("SetupPassword: %v", err)
 	}
-	dbPass, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "db-password", []byte("pg-value"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	apiKey, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "api-key", []byte("key-value"), owner.ID)
+	dbPass, err := e.secrets.Create(ctx, "db-password", []byte("pg-value"))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "not-granted", []byte("must-not-appear"), owner.ID); err != nil {
+	apiKey, err := e.secrets.Create(ctx, "api-key", []byte("key-value"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := e.secrets.Create(ctx, "not-granted", []byte("must-not-appear")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	plaintext, mt, err := e.tokens.Create(ctx, "svc", owner.ID, nil)
+	plaintext, mt, err := e.tokens.Create(ctx, "svc", nil)
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", dbPass.ID, "read", "POSTGRES_PASSWORD"); err != nil {
-		t.Fatalf("AddACL: %v", err)
+	if err := e.tokens.AddGrant(ctx, mt.ID, dbPass.ID, "read", "POSTGRES_PASSWORD"); err != nil {
+		t.Fatalf("AddGrant: %v", err)
 	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", apiKey.ID, "write", ""); err != nil {
-		t.Fatalf("AddACL: %v", err)
+	if err := e.tokens.AddGrant(ctx, mt.ID, apiKey.ID, "write", ""); err != nil {
+		t.Fatalf("AddGrant: %v", err)
 	}
 
 	rec := getEnv(t, e, "Bearer "+plaintext, nil)
@@ -124,15 +122,15 @@ func TestEnvRejectsSessionsAndBadTokens(t *testing.T) {
 	e := newEnv(t, true)
 	ctx := context.Background()
 
-	owner, err := e.users.CreateWithPassword(ctx, "env-owner-2", "x")
+	owner, err := e.users.SetupPassword(ctx, "env-owner-2", "x")
 	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+		t.Fatalf("SetupPassword: %v", err)
 	}
 	sessionToken, _, err := e.sessions.Create(ctx, owner.ID, time.Hour)
 	if err != nil {
 		t.Fatalf("sessions.Create: %v", err)
 	}
-	plaintext, mt, err := e.tokens.Create(ctx, "svc", owner.ID, nil)
+	plaintext, mt, err := e.tokens.Create(ctx, "svc", nil)
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
@@ -161,11 +159,10 @@ func TestEnvWithNoGrantsReturnsEmptyList(t *testing.T) {
 	e := newEnv(t, true)
 	ctx := context.Background()
 
-	owner, err := e.users.CreateWithPassword(ctx, "env-owner-3", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	if _, err := e.users.SetupPassword(ctx, "env-owner-3", "x"); err != nil {
+		t.Fatalf("SetupPassword: %v", err)
 	}
-	plaintext, _, err := e.tokens.Create(ctx, "svc", owner.ID, nil)
+	plaintext, _, err := e.tokens.Create(ctx, "svc", nil)
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
@@ -183,19 +180,18 @@ func TestEnvRejectsDuplicateNamesWithoutLeakingValues(t *testing.T) {
 	e := newEnv(t, true)
 	ctx := context.Background()
 
-	owner, err := e.users.CreateWithPassword(ctx, "env-owner-4", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	if _, err := e.users.SetupPassword(ctx, "env-owner-4", "x"); err != nil {
+		t.Fatalf("SetupPassword: %v", err)
 	}
-	a, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "first", []byte("value-a"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	b, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "second", []byte("value-b"), owner.ID)
+	a, err := e.secrets.Create(ctx, "first", []byte("value-a"))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	plaintext, mt, err := e.tokens.Create(ctx, "svc", owner.ID, nil)
+	b, err := e.secrets.Create(ctx, "second", []byte("value-b"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	plaintext, mt, err := e.tokens.Create(ctx, "svc", nil)
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
@@ -210,7 +206,7 @@ func TestEnvRejectsDuplicateNamesWithoutLeakingValues(t *testing.T) {
 	stmts := []gorqlite.ParameterizedStatement{}
 	for _, id := range []int64{a.ID, b.ID} {
 		stmts = append(stmts, gorqlite.ParameterizedStatement{
-			Query:     `INSERT INTO machine_token_acls (token_id, resource_type, resource_id, permission, env_name) VALUES (?, 'secret', ?, 'read', 'SAME_NAME')`,
+			Query:     `INSERT INTO machine_token_grants (token_id, secret_id, permission, env_name) VALUES (?, ?, 'read', 'SAME_NAME')`,
 			Arguments: []interface{}{mt.ID, id},
 		})
 	}
@@ -247,24 +243,23 @@ func TestEnvETagSkipsUnchangedPollsWithoutAuditing(t *testing.T) {
 	e := newEnv(t, true)
 	ctx := context.Background()
 
-	owner, err := e.users.CreateWithPassword(ctx, "env-owner-5", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	if _, err := e.users.SetupPassword(ctx, "env-owner-5", "x"); err != nil {
+		t.Fatalf("SetupPassword: %v", err)
 	}
-	first, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "first", []byte("v1"), owner.ID)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	second, err := e.secrets.Create(ctx, model.OwnerUser, owner.ID, "second", []byte("v2"), owner.ID)
+	first, err := e.secrets.Create(ctx, "first", []byte("v1"))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	plaintext, mt, err := e.tokens.Create(ctx, "svc", owner.ID, nil)
+	second, err := e.secrets.Create(ctx, "second", []byte("v2"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	plaintext, mt, err := e.tokens.Create(ctx, "svc", nil)
 	if err != nil {
 		t.Fatalf("tokens.Create: %v", err)
 	}
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", first.ID, "read", ""); err != nil {
-		t.Fatalf("AddACL: %v", err)
+	if err := e.tokens.AddGrant(ctx, mt.ID, first.ID, "read", ""); err != nil {
+		t.Fatalf("AddGrant: %v", err)
 	}
 
 	rec := getEnvIfNoneMatch(t, e, plaintext, "")
@@ -303,8 +298,8 @@ func TestEnvETagSkipsUnchangedPollsWithoutAuditing(t *testing.T) {
 	}
 
 	// A new grant changes the ETag.
-	if err := e.tokens.AddACL(ctx, mt.ID, "secret", second.ID, "read", ""); err != nil {
-		t.Fatalf("AddACL: %v", err)
+	if err := e.tokens.AddGrant(ctx, mt.ID, second.ID, "read", ""); err != nil {
+		t.Fatalf("AddGrant: %v", err)
 	}
 	rec = getEnvIfNoneMatch(t, e, plaintext, afterUpdate)
 	if rec.Code != http.StatusOK || rec.Header().Get("ETag") == afterUpdate {

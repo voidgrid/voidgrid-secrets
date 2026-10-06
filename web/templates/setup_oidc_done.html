@@ -1,6 +1,6 @@
 {{define "content"}}
-<h1>OIDC configured</h1>
-<p>Setup is complete. There's nothing more to do here.</p>
-<p class="muted">Recovery codes aren't issued yet - there's no user to attach them to until someone actually logs in. The first successful OIDC login becomes the admin and is shown a one-time batch of recovery codes right then, for use if the provider is ever unreachable.</p>
-<p><a href="/login">continue to login</a></p>
+<h1>OIDC saved - one step left</h1>
+<p>Sign in through your provider now. The identity you sign in with becomes this instance's account, and setup finishes.</p>
+<p><a href="/setup/oidc/signin">sign in with OIDC to finish setup</a></p>
+<p class="muted">This link works for 15 minutes. After setup, no other identity your provider lets through can sign in here.</p>
 {{end}}

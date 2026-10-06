@@ -61,7 +61,7 @@ marked `Secure`, so web login only works over HTTPS.
 Until setup is complete, the server prints a one-time **setup token** to
 its log at every start, and the setup wizard refuses every step without
 it - so only someone who can read the container's log can create the
-admin account or configure OIDC:
+account or configure OIDC:
 
 ```
 docker logs voidgrid-secrets 2>&1 | grep 'setup token'
@@ -71,6 +71,13 @@ Open `/setup`, enter the token, and follow the wizard - see
 [authentication.md](authentication.md). The token lives only in the
 running process: a restart prints a new one, and once setup is complete
 none is generated.
+
+## Locked out
+
+If you've lost your password or authenticator, use a recovery code at
+`/recover`. If the recovery codes are gone too, run
+`docker exec voidgrid-secrets voidgrid-secrets recover` for a one-time
+code - see [authentication.md](authentication.md#recovery).
 
 ## Restarting
 
@@ -93,9 +100,8 @@ These are set in the image; you normally don't need to change them.
 
 ## Using secrets from other containers
 
-Create a machine token in the web UI (admin > tokens) for each consuming
-service and grant it read on just the secrets it needs. The token is
-shown once.
+Create a machine token in the web UI (tokens) for each consuming service
+and grant it read on just the secrets it needs. The token is shown once.
 
 The recommended way to use it is `voidgrid-secrets run`, which wraps the
 consuming container's command and injects every granted secret at

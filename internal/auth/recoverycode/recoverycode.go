@@ -55,3 +55,16 @@ func formatGroups(s string, n int) string {
 	groups = append(groups, s)
 	return strings.Join(groups, "-")
 }
+
+// Normalize puts a typed recovery code into the exact form Generate
+// produced - uppercase, hyphen-grouped - so it still matches if typed in
+// lowercase, without hyphens, or with stray spaces.
+func Normalize(code string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(code) {
+		if r != '-' && r != ' ' && r != '\t' {
+			b.WriteRune(r)
+		}
+	}
+	return formatGroups(b.String(), groupSize)
+}

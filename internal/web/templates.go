@@ -1,6 +1,6 @@
 // Package web serves the terminal-themed, server-rendered HTML UI: the
-// setup wizard, login, the secrets browser, sharing management, and admin
-// screens for users/groups/machine tokens.
+// setup wizard, sign-in and account recovery, the secrets browser,
+// machine tokens, and the audit log.
 //
 // Plain html/template + forms were chosen over a JS framework or even
 // htmx, per the project's simplicity priority: one language/toolchain, no separate frontend build, and a secrets
@@ -32,9 +32,9 @@ var pages = map[string]*template.Template{}
 func init() {
 	for _, name := range []string{
 		"setup_init", "setup_confirm", "setup_oidc", "setup_oidc_done",
-		"recovery_codes", "login", "login_recovery", "signin_continue",
-		"secrets_list", "secret_new", "secret_detail", "secret_reveal",
-		"users", "groups", "group_detail", "tokens", "token_detail", "audit",
+		"recovery_codes", "login", "signin_continue", "recover", "recover_reset",
+		"secrets_list", "secret_new", "secret_detail",
+		"tokens", "token_detail", "audit",
 	} {
 		pages[name] = template.Must(template.New("layout").ParseFS(
 			webassets.FS, "templates/layout.html", "templates/"+name+".html",

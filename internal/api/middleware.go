@@ -115,20 +115,6 @@ func sessionAuthMiddleware(api huma.API, sessionAuthr gosession.Authenticator) f
 	}
 }
 
-// adminOnlyMiddleware requires that sessionAuthMiddleware has already run
-// and populated an admin user in context. It must be chained after
-// sessionAuthMiddleware in the group's middleware list.
-func adminOnlyMiddleware(api huma.API) func(huma.Context, func(huma.Context)) {
-	return func(ctx huma.Context, next func(huma.Context)) {
-		user, ok := gosession.FromContext(ctx.Context())
-		if !ok || !user.IsAdmin {
-			_ = huma.WriteErr(api, ctx, 403, "admin access required")
-			return
-		}
-		next(ctx)
-	}
-}
-
 // cookieValue extracts a cookie's value from the request's raw Cookie
 // header using net/http's standard parser, which correctly handles
 // multiple cookies and escaping that naive string splitting would not.

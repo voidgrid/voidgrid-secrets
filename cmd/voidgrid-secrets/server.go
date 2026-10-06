@@ -19,6 +19,7 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/config"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
+	"github.com/voidgrid/voidgrid-secrets/internal/recovery"
 	"github.com/voidgrid/voidgrid-secrets/internal/setup"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 	"github.com/voidgrid/voidgrid-secrets/internal/web"
@@ -43,34 +44,16 @@ func runServer(cfg config.Config) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 
-	violations, err := db.ForeignKeyViolations(context.Background())
-	if err != nil {
-		return err
-	}
-	for _, v := range violations {
-		log.Printf("storage: existing row breaks a foreign key (written before enforcement was enabled): %s", v)
-	}
-
 	auditRepo := storage.NewAuditRepo(db)
 	secretRepo := storage.NewSecretRepo(db, rootKey)
-	upgraded, err := secretRepo.UpgradeEncryption(context.Background())
-	if err != nil {
-		return fmt.Errorf("upgrade secret encryption: %w", err)
-	}
-	if upgraded > 0 {
-		log.Printf("storage: re-encrypted %d secret(s) to bind each to its id", upgraded)
-		audit.Record(context.Background(), auditRepo, audit.Event{
-			Actor: audit.System(), Action: audit.EncryptionUpgraded, ResourceType: "secret",
-			Details: map[string]string{"count": strconv.Itoa(upgraded)},
-		})
-	}
-	shareRepo := storage.NewShareRepo(db)
 	tokenRepo := storage.NewTokenRepo(db)
 	userRepo := storage.NewUserRepo(db, rootKey)
-	groupRepo := storage.NewGroupRepo(db)
 	sessionRepo := storage.NewSessionRepo(db)
 	authConfigRepo := storage.NewAuthConfigRepo(db, rootKey)
 	recoveryCodeRepo := storage.NewRecoveryCodeRepo(db)
+	resetRepo := storage.NewResetRepo(db, rootKey)
+
+	go pruneAuditLog(context.Background(), auditRepo)
 
 	oidcProvider := loadOIDCProvider(context.Background(), authConfigRepo)
 
@@ -91,17 +74,19 @@ func runServer(cfg config.Config) error {
 		HashRecoveryCode:      crypto.HashToken,
 		Audit:                 auditRepo,
 	}
+	// 10 failures in 15 minutes locks sign-in (and, separately, recovery)
+	// out until the 15 minutes are up.
+	limiter := session.NewAttemptLimiter(10, 15*time.Minute)
 	loginService := &session.LoginService{
 		Users:          userRepo,
 		Sessions:       sessionRepo,
-		RecoveryCodes:  recoveryCodeRepo,
 		VerifyPassword: crypto.VerifyPassword,
 		ValidateTOTP:   totp.Validate,
-		// 10 failures in 15 minutes locks a username out of password and
-		// recovery-code login until the 15 minutes are up.
-		Limiter: session.NewAttemptLimiter(10, 15*time.Minute),
-		Audit:   auditRepo,
+		Limiter:        limiter,
+		Audit:          auditRepo,
 	}
+	recoveryService := newRecoveryService(userRepo, resetRepo, recoveryCodeRepo, sessionRepo, auditRepo)
+	recoveryService.Limiter = limiter
 
 	apiHandler := api.NewRouter(api.Deps{
 		SetupChecker:   authConfigRepo,
@@ -111,9 +96,7 @@ func runServer(cfg config.Config) error {
 		AuthHandler:    api.NewAuthHandler(loginService, sessionRepo, auditRepo),
 		SecretsHandler: api.NewSecretsHandler(secretRepo, auditRepo),
 		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, auditRepo),
-		SharesHandler:  api.NewSharesHandler(secretRepo, shareRepo, auditRepo),
-		UsersHandler:   api.NewUsersHandler(userRepo, auditRepo),
-		GroupsHandler:  api.NewGroupsHandler(groupRepo, auditRepo),
+		RecoverHandler: api.NewRecoverHandler(recoveryService),
 		TokensHandler:  api.NewTokensHandler(tokenRepo, auditRepo),
 		AuditHandler:   api.NewAuditHandler(auditRepo),
 		Audit:          auditRepo,
@@ -123,12 +106,11 @@ func runServer(cfg config.Config) error {
 		SetupChecker: authConfigRepo,
 		SessionAuth:  sessionRepo,
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
-		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, recoveryCodeRepo, auditRepo),
-		Secrets:      web.NewSecretsHandler(secretRepo, shareRepo, auditRepo),
-		Users:        web.NewUsersHandler(userRepo, auditRepo),
-		Groups:       web.NewGroupsHandler(groupRepo, auditRepo),
-		Tokens:       web.NewTokensHandler(tokenRepo, auditRepo),
-		Audit:        web.NewAuditHandler(auditRepo),
+		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, wizard, auditRepo),
+		Recover:      web.NewRecoverHandler(recoveryService),
+		Secrets:      web.NewSecretsHandler(secretRepo, auditRepo),
+		Tokens:       web.NewTokensHandler(tokenRepo, secretRepo, auditRepo),
+		Audit:        web.NewAuditHandler(auditRepo, tokenRepo),
 	})
 
 	root := chi.NewMux()
@@ -189,10 +171,8 @@ func setupTokenIfNeeded(ctx context.Context, authConfigRepo *storage.AuthConfigR
 func loadOIDCProvider(ctx context.Context, authConfigRepo *storage.AuthConfigRepo) *oidcclient.Provider {
 	provider := &oidcclient.Provider{}
 
-	complete, err := authConfigRepo.IsComplete(ctx)
-	if err != nil || !complete {
-		return provider
-	}
+	// A pending config (OIDC saved, operator not signed in yet) is loaded
+	// too, so a restart mid-setup doesn't strand the sign-in step.
 	cfg, err := authConfigRepo.Get(ctx)
 	if err != nil || cfg.AuthMethod != model.AuthOIDC {
 		return provider
@@ -211,4 +191,41 @@ func loadOIDCProvider(ctx context.Context, authConfigRepo *storage.AuthConfigRep
 
 	provider.Set(client)
 	return provider
+}
+
+// auditRetention is how long audit entries are kept.
+const auditRetention = 14 * 24 * time.Hour
+
+// pruneAuditLog deletes audit entries older than auditRetention now and
+// then once a day.
+func pruneAuditLog(ctx context.Context, repo *storage.AuditRepo) {
+	for {
+		n, err := repo.Prune(ctx, time.Now().Add(-auditRetention))
+		switch {
+		case err != nil:
+			log.Printf("audit: prune failed: %v", err)
+		case n > 0:
+			audit.Record(ctx, repo, audit.Event{
+				Actor: audit.System(), Action: audit.AuditPruned, ResourceType: "audit",
+				Details: map[string]string{"deleted": strconv.FormatInt(n, 10), "older_than_days": "14"},
+			})
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(24 * time.Hour):
+		}
+	}
+}
+
+// newRecoveryService builds the account recovery service, shared by the
+// server and the `recover` command.
+func newRecoveryService(users *storage.UserRepo, resets *storage.ResetRepo, codes *storage.RecoveryCodeRepo,
+	sessions *storage.SessionRepo, auditLog audit.Logger,
+) *recovery.Service {
+	return &recovery.Service{
+		Users: users, Resets: resets, RecoveryCodes: codes, Sessions: sessions,
+		GenerateTOTP: totp.Generate, ValidateTOTP: totp.Validate, HashPassword: crypto.HashPassword,
+		Audit: auditLog,
+	}
 }

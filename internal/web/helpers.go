@@ -18,18 +18,13 @@ func parseForm(w http.ResponseWriter, r *http.Request) error {
 	return r.ParseForm()
 }
 
-// idParam parses the named chi URL parameter as an int64 path ID.
-func idParam(r *http.Request, name string) (int64, error) {
-	return strconv.ParseInt(chi.URLParam(r, name), 10, 64)
+// idParam parses the {id} URL parameter.
+func idParam(r *http.Request) (int64, error) {
+	return strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 }
 
 // parseFormInt64 parses a submitted form field as an int64. Call
 // r.ParseForm() before using this.
 func parseFormInt64(r *http.Request, field string) (int64, error) {
 	return strconv.ParseInt(r.FormValue(field), 10, 64)
-}
-
-// redirectToGroup redirects to a group's detail page.
-func redirectToGroup(w http.ResponseWriter, r *http.Request, groupID int64) {
-	http.Redirect(w, r, "/admin/groups/"+strconv.FormatInt(groupID, 10), http.StatusSeeOther)
 }

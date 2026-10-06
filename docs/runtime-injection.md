@@ -23,7 +23,7 @@ values.
 
 ## 1. Create a token and grant it secrets
 
-In the web UI, go to admin > tokens, create a token for the service (it's
+In the web UI, go to tokens, create a token for the service (it's
 shown once), and grant it **read** on each secret that service needs. Each
 grant has an environment variable name: set one explicitly (e.g.
 `POSTGRES_PASSWORD`) or leave it blank to derive it from the secret's name
@@ -160,14 +160,13 @@ themselves.
 - **The token itself still has to reach the container.** As a Docker
   secret it's a file on the host's disk. Scope each token to read-only on
   just that service's secrets, so a leaked token exposes as little as
-  possible, and revoke it from admin > tokens if it leaks.
+  possible, and revoke it from the tokens page if it leaks.
 - **Process memory is readable locally.** Root, or the same user inside
   the container, can read a running process's environment through
   `/proc`. That's true of every tool that works this way.
 - **Plain HTTP on the Docker network.** Inside one compose project,
   `http://voidgrid-secrets:8443` never leaves the host. Across hosts, use
   the HTTPS address behind your reverse proxy.
-- **Per-secret grants only.** A token's group grants aren't used by `run`.
 
 ## Agent mode: no wrapper
 
@@ -290,4 +289,3 @@ the agent (UID 1000).
   `run`.
 - Files only: an image that only reads plain environment variables still
   needs `run`.
-- Per-secret grants only, as with `run`.

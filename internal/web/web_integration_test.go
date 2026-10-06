@@ -19,6 +19,7 @@ import (
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	gototp "github.com/voidgrid/voidgrid-secrets/internal/auth/totp"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
+	"github.com/voidgrid/voidgrid-secrets/internal/recovery"
 	"github.com/voidgrid/voidgrid-secrets/internal/setup"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 	"github.com/voidgrid/voidgrid-secrets/internal/web"
@@ -76,10 +77,8 @@ func newEnv(t *testing.T) env {
 
 	rootKey := make([]byte, crypto.KeySize)
 	secretRepo := storage.NewSecretRepo(db, rootKey)
-	shareRepo := storage.NewShareRepo(db)
 	tokenRepo := storage.NewTokenRepo(db)
 	userRepo := storage.NewUserRepo(db, rootKey)
-	groupRepo := storage.NewGroupRepo(db)
 	sessionRepo := storage.NewSessionRepo(db)
 	authConfigRepo := storage.NewAuthConfigRepo(db, rootKey)
 	auditRepo := storage.NewAuditRepo(db)
@@ -102,7 +101,6 @@ func newEnv(t *testing.T) env {
 		Audit:          auditRepo,
 		Users:          userRepo,
 		Sessions:       sessionRepo,
-		RecoveryCodes:  recoveryCodeRepo,
 		VerifyPassword: crypto.VerifyPassword,
 		ValidateTOTP:   gototp.Validate,
 	}
@@ -111,12 +109,14 @@ func newEnv(t *testing.T) env {
 		SetupChecker: authConfigRepo,
 		SessionAuth:  sessionRepo,
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
-		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, recoveryCodeRepo, auditRepo),
-		Secrets:      web.NewSecretsHandler(secretRepo, shareRepo, auditRepo),
-		Users:        web.NewUsersHandler(userRepo, auditRepo),
-		Groups:       web.NewGroupsHandler(groupRepo, auditRepo),
-		Tokens:       web.NewTokensHandler(tokenRepo, auditRepo),
-		Audit:        web.NewAuditHandler(auditRepo),
+		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, wizard, auditRepo),
+		Recover: web.NewRecoverHandler(&recovery.Service{
+			Users: userRepo, Resets: storage.NewResetRepo(db, rootKey), RecoveryCodes: recoveryCodeRepo, Sessions: sessionRepo,
+			GenerateTOTP: gototp.Generate, ValidateTOTP: gototp.Validate, HashPassword: crypto.HashPassword, Audit: auditRepo,
+		}),
+		Secrets: web.NewSecretsHandler(secretRepo, auditRepo),
+		Tokens:  web.NewTokensHandler(tokenRepo, secretRepo, auditRepo),
+		Audit:   web.NewAuditHandler(auditRepo, tokenRepo),
 	})
 
 	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo}
@@ -246,13 +246,20 @@ func TestWebFullSetupLoginSecretFlow(t *testing.T) {
 		t.Fatalf("expected secrets list to mention db-password, body=%s", listRec.Body.String())
 	}
 
-	// Reveal shows the plaintext.
-	revealReq := httptest.NewRequest(http.MethodGet, location+"/reveal", nil)
+	// The detail page never contains the value; "show" fetches it.
+	detailReq := httptest.NewRequest(http.MethodGet, location, nil)
+	detailReq.AddCookie(sessionCookie)
+	detailRec := httptest.NewRecorder()
+	e.handler.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK || strings.Contains(detailRec.Body.String(), "hunter2") || !strings.Contains(detailRec.Body.String(), "data-reveal-url") {
+		t.Fatalf("detail page status=%d, must not show the value: %s", detailRec.Code, detailRec.Body.String())
+	}
+	revealReq := httptest.NewRequest(http.MethodGet, location+"/value", nil)
 	revealReq.AddCookie(sessionCookie)
 	revealRec := httptest.NewRecorder()
 	e.handler.ServeHTTP(revealRec, revealReq)
-	if revealRec.Code != http.StatusOK || !strings.Contains(revealRec.Body.String(), "hunter2") {
-		t.Fatalf("reveal status=%d, expected body to contain hunter2: %s", revealRec.Code, revealRec.Body.String())
+	if revealRec.Code != http.StatusOK || !strings.Contains(revealRec.Body.String(), `"value":"hunter2"`) {
+		t.Fatalf("value status=%d, body=%s", revealRec.Code, revealRec.Body.String())
 	}
 
 	// Logout clears the cookie.
@@ -330,42 +337,15 @@ func TestWebSecretsRequiresSession(t *testing.T) {
 	}
 }
 
-func TestWebAdminRequiresAdminUser(t *testing.T) {
-	e := newEnv(t)
-	completeSetupDirect(t, e)
-
-	plainUser, err := e.users.CreateWithPassword(context.Background(), "plain", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	sessionToken, _, err := e.sessions.Create(context.Background(), plainUser.ID, gosession.DefaultTTL)
-	if err != nil {
-		t.Fatalf("sessions.Create: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
-	req.AddCookie(&http.Cookie{Name: gosession.CookieName, Value: sessionToken}) //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
-	}
-}
-
-// completeSetupDirect marks setup complete via a throwaway admin account,
-// bypassing the HTTP wizard flow for tests that don't care about it.
+// completeSetupDirect creates the account and marks setup complete,
+// bypassing the HTTP wizard for tests that don't care about it.
 func completeSetupDirect(t *testing.T, e env) {
 	t.Helper()
 	ctx := context.Background()
-	user, err := e.users.CreateWithPassword(ctx, "setup-bootstrap", "x")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	if _, err := e.users.SetupPassword(ctx, "owner", "x"); err != nil {
+		t.Fatalf("SetupPassword: %v", err)
 	}
-	if err := e.users.PromoteToAdmin(ctx, user.ID); err != nil {
-		t.Fatalf("PromoteToAdmin: %v", err)
-	}
-	if err := e.users.SetTOTPSecret(ctx, user.ID, "JBSWY3DPEHPK3PXP"); err != nil {
+	if err := e.users.SetTOTPSecret(ctx, "JBSWY3DPEHPK3PXP"); err != nil {
 		t.Fatalf("SetTOTPSecret: %v", err)
 	}
 	if err := e.authConfig.CompletePasswordTOTP(ctx); err != nil {

@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
-	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
 
@@ -25,26 +25,25 @@ func requestContext(t *testing.T) context.Context {
 	return ctx
 }
 
-func TestAuditLogRecordsAndFilters(t *testing.T) {
+func TestAuditLogRecordsFiltersAndPages(t *testing.T) {
 	db, _ := newTestDB(t)
 	ctx := context.Background()
-	rootKey := make([]byte, crypto.KeySize)
-	user, err := storage.NewUserRepo(db, rootKey).CreateWithPassword(ctx, "audit-user", "x")
+	secret, err := storage.NewSecretRepo(db, make([]byte, crypto.KeySize)).Create(ctx, "audited-secret", []byte("v"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, err := storage.NewSecretRepo(db, rootKey).Create(ctx, model.OwnerUser, user.ID, "audit-secret", []byte("v"), user.ID)
+	_, mt, err := storage.NewTokenRepo(db).Create(ctx, "audited-token", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	repo := storage.NewAuditRepo(db)
 
-	// Every actor type is accepted (migration 0008 widened the CHECK).
 	events := []audit.Event{
-		{Actor: audit.User(user.ID), Action: audit.SecretReveal, ResourceType: "secret", ResourceID: secret.ID},
-		{Actor: audit.Anonymous(), Action: audit.LoginFailed, ResourceType: "user", ResourceID: user.ID, Details: map[string]string{"reason": "wrong password"}},
-		{Actor: audit.System(), Action: audit.EncryptionUpgraded, ResourceType: "secret"},
-		{Actor: audit.Token(42), Action: audit.SecretReveal, ResourceType: "secret", ResourceID: secret.ID},
+		{Actor: audit.User(1), Action: audit.SecretReveal, ResourceType: "secret", ResourceID: secret.ID},
+		{Actor: audit.Anonymous(), Action: audit.LoginFailed, ResourceType: "user", Details: map[string]string{"reason": "wrong password"}},
+		{Actor: audit.User(1), Action: audit.TokenGrant, ResourceType: "token", ResourceID: mt.ID},
+		{Actor: audit.Token(mt.ID), Action: audit.SecretReveal, ResourceType: "secret", ResourceID: secret.ID},
+		{Actor: audit.System(), Action: audit.BreakGlassIssued, ResourceType: "user", ResourceID: 1},
 	}
 	reqCtx := requestContext(t)
 	for _, e := range events {
@@ -54,39 +53,48 @@ func TestAuditLogRecordsAndFilters(t *testing.T) {
 	}
 
 	all, err := repo.List(ctx, storage.AuditFilter{})
-	if err != nil || len(all) != 4 {
-		t.Fatalf("List = %d entries, %v; want 4", len(all), err)
+	if err != nil || len(all) != 5 {
+		t.Fatalf("List = %d, %v; want 5", len(all), err)
 	}
-	if all[0].Action != audit.SecretReveal || all[0].ActorType != audit.ActorToken {
-		t.Fatalf("newest entry = %+v, want the token reveal", all[0])
-	}
-	failed := all[2]
+	failed := all[3]
 	if failed.Details["reason"] != "wrong password" || failed.Details["ip"] != "192.0.2.10" || failed.Details["forwarded_for"] != "198.51.100.7" {
 		t.Fatalf("details = %v", failed.Details)
 	}
-	if failed.ResourceName != "audit-user" {
-		t.Fatalf("resource name = %q, want audit-user", failed.ResourceName)
-	}
-	userReveal := all[3]
-	if userReveal.ActorName != "audit-user" || userReveal.ResourceName != "audit-secret" {
-		t.Fatalf("names = %q / %q", userReveal.ActorName, userReveal.ResourceName)
+	tokenReveal := all[1]
+	if tokenReveal.ActorName != "audited-token" || tokenReveal.ResourceName != "audited-secret" {
+		t.Fatalf("names = %q / %q", tokenReveal.ActorName, tokenReveal.ResourceName)
 	}
 
-	reveals, err := repo.List(ctx, storage.AuditFilter{Action: audit.SecretReveal})
-	if err != nil || len(reveals) != 2 {
-		t.Fatalf("action filter: %d, %v; want 2", len(reveals), err)
+	if reveals, _ := repo.List(ctx, storage.AuditFilter{Action: audit.SecretReveal}); len(reveals) != 2 {
+		t.Fatalf("action filter: %d, want 2", len(reveals))
 	}
-	bySecret, err := repo.List(ctx, storage.AuditFilter{ResourceType: "secret", ResourceID: secret.ID, ActorType: audit.ActorUser})
-	if err != nil || len(bySecret) != 1 {
-		t.Fatalf("resource+actor filter: %d, %v; want 1", len(bySecret), err)
+	// The token filter matches the token acting and being acted on.
+	if byToken, _ := repo.List(ctx, storage.AuditFilter{TokenID: mt.ID}); len(byToken) != 2 {
+		t.Fatalf("token filter: %d, want 2", len(byToken))
 	}
 
-	page1, err := repo.List(ctx, storage.AuditFilter{Limit: 3})
-	if err != nil || len(page1) != 3 {
-		t.Fatalf("page 1: %d, %v", len(page1), err)
+	page1, _ := repo.List(ctx, storage.AuditFilter{Limit: 3})
+	page2, _ := repo.List(ctx, storage.AuditFilter{Limit: 3, BeforeID: page1[2].ID})
+	if len(page1) != 3 || len(page2) != 2 || page2[1].ID != all[4].ID {
+		t.Fatalf("paging: %d then %d", len(page1), len(page2))
 	}
-	page2, err := repo.List(ctx, storage.AuditFilter{Limit: 3, BeforeID: page1[2].ID})
-	if err != nil || len(page2) != 1 || page2[0].ID != all[3].ID {
-		t.Fatalf("page 2: %+v, %v", page2, err)
+}
+
+func TestAuditPruneDeletesOnlyOldEntries(t *testing.T) {
+	db, baseURL := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewAuditRepo(db)
+	if err := repo.Log(ctx, audit.Event{Actor: audit.User(1), Action: audit.Login, ResourceType: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	rawExec(t, baseURL, `INSERT INTO audit_log (actor_type, actor_id, action, resource_type, created_at)
+		VALUES ('user', 1, 'login', 'user', '2020-01-01T00:00:00.000Z')`)
+
+	n, err := repo.Prune(ctx, time.Now().Add(-14*24*time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("Prune = %d, %v; want 1", n, err)
+	}
+	if left, _ := repo.List(ctx, storage.AuditFilter{}); len(left) != 1 {
+		t.Fatalf("entries left = %d, want 1", len(left))
 	}
 }

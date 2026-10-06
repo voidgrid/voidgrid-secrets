@@ -39,22 +39,12 @@ type SessionCreator interface {
 	Create(ctx context.Context, userID int64, ttl time.Duration) (plaintext string, expiresAt time.Time, err error)
 }
 
-// RecoveryCodeConsumer is the subset of recovery-code storage the
-// recovery-code login flow needs.
-type RecoveryCodeConsumer interface {
-	Consume(ctx context.Context, userID int64, codeHash string) (ok bool, err error)
-}
-
-// LoginService implements both the password+TOTP login flow (verify
-// password, then require a valid TOTP code with no bypass) and the
-// recovery-code fallback shared by both auth methods: a password+TOTP
-// user who lost their device, or an OIDC user when the identity provider
-// is unreachable, log in the same way - username plus one single-use
-// recovery code.
+// LoginService implements password+TOTP sign-in: verify the password,
+// then require a valid, unused TOTP code - no bypass. (Recovery codes
+// don't sign in; they start an account reset - see internal/recovery.)
 type LoginService struct {
 	Users          UserLookup
 	Sessions       SessionCreator
-	RecoveryCodes  RecoveryCodeConsumer
 	VerifyPassword func(password, hash string) (bool, error)
 	ValidateTOTP   func(code, secret string) bool
 	TTL            time.Duration
@@ -146,8 +136,6 @@ func (s *LoginService) login(ctx context.Context, username, password, totpCode s
 	switch {
 	case err != nil:
 		reason = "unknown user"
-	case rec.Disabled:
-		reason = "account disabled"
 	case rec.AuthMethod != model.AuthPasswordTOTP:
 		reason = "account uses " + string(rec.AuthMethod)
 	case rec.PasswordHash == "":
@@ -193,33 +181,4 @@ func (s *LoginService) newSession(ctx context.Context, userID int64) attempt {
 	}
 	plaintext, expiresAt, err := s.Sessions.Create(ctx, userID, ttl)
 	return attempt{plaintext: plaintext, expiresAt: expiresAt, userID: userID, err: err}
-}
-
-// LoginWithRecoveryCode authenticates username/code against the user's
-// stored recovery codes and, on success, returns a new session token and
-// its expiry. Works identically regardless of the account's normal auth
-// method (password+TOTP or OIDC) - recovery codes are the one fallback
-// path shared by both, since both GetAuthRecord lookups and the codes
-// themselves are keyed by user, not by auth method.
-func (s *LoginService) LoginWithRecoveryCode(ctx context.Context, username, code string) (plaintext string, expiresAt time.Time, err error) {
-	return s.limited(ctx, username, "recovery code", audit.RecoveryLogin, audit.RecoveryLoginFailed, func() attempt {
-		return s.loginWithRecoveryCode(ctx, username, code)
-	})
-}
-
-func (s *LoginService) loginWithRecoveryCode(ctx context.Context, username, code string) attempt {
-	rec, err := s.Users.GetAuthRecord(ctx, username)
-	if err != nil {
-		return failed(0, "unknown user")
-	}
-	if rec.Disabled {
-		return failed(rec.ID, "account disabled")
-	}
-
-	ok, err := s.RecoveryCodes.Consume(ctx, rec.ID, crypto.HashToken(code))
-	if err != nil || !ok {
-		return failed(rec.ID, "wrong or used recovery code")
-	}
-
-	return s.newSession(ctx, rec.ID)
 }

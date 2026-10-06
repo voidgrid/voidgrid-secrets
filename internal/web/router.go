@@ -15,21 +15,24 @@ type Deps struct {
 	SessionAuth  session.Authenticator
 	Setup        *SetupHandler
 	Auth         *AuthHandler
+	Recover      *RecoverHandler
 	Secrets      *SecretsHandler
-	Users        *UsersHandler
-	Groups       *GroupsHandler
 	Tokens       *TokensHandler
 	Audit        *AuditHandler
 }
 
 // NewRouter builds the web UI's router: the setup wizard (reachable only
-// while setup is incomplete), login (reachable only once it is), and
-// everything else behind a session (and, for /admin/*, an admin session).
+// while setup is incomplete), sign-in and recovery (only once it's
+// complete), and everything else behind the account's session.
 func NewRouter(deps Deps) http.Handler {
 	r := chi.NewMux()
 	r.Use(securityHeaders)
 
 	r.Handle("/static/*", http.FileServerFS(webassets.FS))
+
+	// The OIDC callback serves both setup (claiming the account) and
+	// sign-in afterwards, so it sits outside both gates.
+	r.Get("/login/oidc/callback", deps.Auth.OIDCCallback)
 
 	r.Group(func(r chi.Router) {
 		r.Use(redirectIfSetupComplete(deps.SetupChecker))
@@ -38,6 +41,7 @@ func NewRouter(deps Deps) http.Handler {
 		r.Post("/setup/confirm", deps.Setup.SubmitConfirm)
 		r.Get("/setup/oidc", deps.Setup.ShowOIDCSetup)
 		r.Post("/setup/oidc", deps.Setup.SubmitOIDCSetup)
+		r.Get("/setup/oidc/signin", deps.Setup.StartOIDCClaim)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -46,9 +50,10 @@ func NewRouter(deps Deps) http.Handler {
 		r.Post("/login", deps.Auth.SubmitLogin)
 		r.Post("/logout", deps.Auth.SubmitLogout)
 		r.Get("/login/oidc", deps.Auth.StartOIDCLogin)
-		r.Get("/login/oidc/callback", deps.Auth.OIDCCallback)
-		r.Get("/login/recovery", deps.Auth.ShowRecoveryLogin)
-		r.Post("/login/recovery", deps.Auth.SubmitRecoveryLogin)
+		r.Get("/recover", deps.Recover.ShowStart)
+		r.Post("/recover", deps.Recover.SubmitStart)
+		r.Get("/recover/reset", deps.Recover.ShowReset)
+		r.Post("/recover/reset", deps.Recover.SubmitReset)
 
 		r.Group(func(r chi.Router) {
 			r.Use(requireSession(deps.SessionAuth))
@@ -61,32 +66,18 @@ func NewRouter(deps Deps) http.Handler {
 			r.Get("/secrets/new", deps.Secrets.ShowNew)
 			r.Post("/secrets/new", deps.Secrets.SubmitNew)
 			r.Get("/secrets/{id}", deps.Secrets.Detail)
+			r.Get("/secrets/{id}/value", deps.Secrets.Value)
 			r.Post("/secrets/{id}/update", deps.Secrets.SubmitUpdate)
-			r.Get("/secrets/{id}/reveal", deps.Secrets.Reveal)
-			r.Post("/secrets/{id}/shares", deps.Secrets.SubmitCreateShare)
-			r.Post("/secrets/{id}/shares/{granteeType}/{granteeId}/delete", deps.Secrets.SubmitDeleteShare)
+			r.Post("/secrets/{id}/rename", deps.Secrets.SubmitRename)
+			r.Post("/secrets/{id}/delete", deps.Secrets.SubmitDelete)
 
-			r.Group(func(r chi.Router) {
-				r.Use(requireAdmin)
+			r.Get("/tokens", deps.Tokens.List)
+			r.Post("/tokens", deps.Tokens.SubmitCreate)
+			r.Get("/tokens/{id}", deps.Tokens.Detail)
+			r.Post("/tokens/{id}/revoke", deps.Tokens.SubmitRevoke)
+			r.Post("/tokens/{id}/grants", deps.Tokens.SubmitGrant)
 
-				r.Get("/admin/users", deps.Users.List)
-				r.Post("/admin/users", deps.Users.SubmitCreate)
-				r.Post("/admin/users/{id}/disabled", deps.Users.SubmitSetDisabled)
-
-				r.Get("/admin/groups", deps.Groups.List)
-				r.Post("/admin/groups", deps.Groups.SubmitCreate)
-				r.Get("/admin/groups/{id}", deps.Groups.Detail)
-				r.Post("/admin/groups/{id}/members", deps.Groups.SubmitAddMember)
-				r.Post("/admin/groups/{id}/members/{userId}/delete", deps.Groups.SubmitRemoveMember)
-
-				r.Get("/admin/tokens", deps.Tokens.List)
-				r.Post("/admin/tokens", deps.Tokens.SubmitCreate)
-				r.Get("/admin/tokens/{id}", deps.Tokens.Detail)
-				r.Post("/admin/tokens/{id}/revoke", deps.Tokens.SubmitRevoke)
-				r.Post("/admin/tokens/{id}/acls", deps.Tokens.SubmitAddACL)
-
-				r.Get("/admin/audit", deps.Audit.List)
-			})
+			r.Get("/audit", deps.Audit.List)
 		})
 	})
 

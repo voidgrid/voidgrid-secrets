@@ -10,225 +10,80 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
 
-func TestUserRepoCreateWithPasswordAndGetAuthRecord(t *testing.T) {
+func TestAccountDoesNotExistUntilSetup(t *testing.T) {
 	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
-	ctx := context.Background()
-
-	user, err := repo.CreateWithPassword(ctx, "alice", "hashed-password")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-	if user.AuthMethod != model.AuthPasswordTOTP {
-		t.Fatalf("got auth method %q, want %q", user.AuthMethod, model.AuthPasswordTOTP)
-	}
-
-	if err := repo.SetTOTPSecret(ctx, user.ID, "JBSWY3DPEHPK3PXP"); err != nil {
-		t.Fatalf("SetTOTPSecret: %v", err)
-	}
-
-	rec, err := repo.GetAuthRecord(ctx, "alice")
-	if err != nil {
-		t.Fatalf("GetAuthRecord: %v", err)
-	}
-	if rec.PasswordHash != "hashed-password" {
-		t.Fatalf("got password hash %q, want %q", rec.PasswordHash, "hashed-password")
-	}
-	if rec.TOTPSecret != "JBSWY3DPEHPK3PXP" {
-		t.Fatalf("got TOTP secret %q, want %q", rec.TOTPSecret, "JBSWY3DPEHPK3PXP")
+	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
+	if _, err := repo.Get(context.Background()); !errors.Is(err, storage.ErrUserNotFound) {
+		t.Fatalf("Get = %v, want ErrUserNotFound", err)
 	}
 }
 
-func TestUserRepoGetAuthRecordBeforeTOTPEnrollmentHasEmptySecret(t *testing.T) {
+func TestPasswordAccountRoundTrip(t *testing.T) {
 	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
 	ctx := context.Background()
+	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 
-	if _, err := repo.CreateWithPassword(ctx, "bob", "hashed-password"); err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	u, err := repo.SetupPassword(ctx, "owner", "hash-1")
+	if err != nil || u.ID != storage.AccountID || u.AuthMethod != model.AuthPasswordTOTP {
+		t.Fatalf("SetupPassword = %+v, %v", u, err)
 	}
-
-	rec, err := repo.GetAuthRecord(ctx, "bob")
-	if err != nil {
-		t.Fatalf("GetAuthRecord: %v", err)
+	rec, err := repo.GetAuthRecord(ctx, "owner")
+	if err != nil || rec.PasswordHash != "hash-1" || rec.TOTPSecret != "" {
+		t.Fatalf("before TOTP: %+v, %v", rec, err)
 	}
-	if rec.TOTPSecret != "" {
-		t.Fatalf("expected empty TOTP secret before enrollment, got %q", rec.TOTPSecret)
+	if err := repo.SetTOTPSecret(ctx, "JBSWY3DPEHPK3PXP"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetPassword(ctx, "hash-2"); err != nil {
+		t.Fatal(err)
+	}
+	rec, err = repo.GetAuthRecord(ctx, "owner")
+	if err != nil || rec.PasswordHash != "hash-2" || rec.TOTPSecret != "JBSWY3DPEHPK3PXP" {
+		t.Fatalf("after updates: %+v, %v", rec, err)
+	}
+	if _, err := repo.GetAuthRecord(ctx, "someone-else"); !errors.Is(err, storage.ErrUserNotFound) {
+		t.Fatalf("wrong username: %v", err)
 	}
 }
 
-func TestUserRepoCreateWithOIDCAndLookupBySubject(t *testing.T) {
+// Setup can be restarted before it's confirmed; there is still only one
+// account afterwards.
+func TestSetupReplacesTheOneAccount(t *testing.T) {
 	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
 	ctx := context.Background()
+	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 
-	created, err := repo.CreateWithOIDC(ctx, "carol", "oidc-subject-123")
-	if err != nil {
-		t.Fatalf("CreateWithOIDC: %v", err)
+	if _, err := repo.SetupPassword(ctx, "first", "h"); err != nil {
+		t.Fatal(err)
 	}
-	if created.AuthMethod != model.AuthOIDC {
-		t.Fatalf("got auth method %q, want %q", created.AuthMethod, model.AuthOIDC)
+	if err := repo.SetTOTPSecret(ctx, "JBSWY3DPEHPK3PXP"); err != nil {
+		t.Fatal(err)
 	}
-
-	found, err := repo.GetByOIDCSubject(ctx, "oidc-subject-123")
-	if err != nil {
-		t.Fatalf("GetByOIDCSubject: %v", err)
+	u, err := repo.SetupOIDC(ctx, "second", "subject-2")
+	if err != nil || u.ID != storage.AccountID || u.Username != "second" || u.AuthMethod != model.AuthOIDC {
+		t.Fatalf("SetupOIDC = %+v, %v", u, err)
 	}
-	if found.ID != created.ID {
-		t.Fatalf("got user ID %d, want %d", found.ID, created.ID)
+	rec, err := repo.AuthRecord(ctx)
+	if err != nil || rec.PasswordHash != "" || rec.TOTPSecret != "" || rec.OIDCSubject != "subject-2" {
+		t.Fatalf("replaced account kept old credentials: %+v, %v", rec, err)
 	}
 }
 
-func TestUserRepoCountUsers(t *testing.T) {
+func TestOIDCOwnerAcceptsOnlyTheAccountsIdentity(t *testing.T) {
 	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
 	ctx := context.Background()
+	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 
-	n, err := repo.CountUsers(ctx)
-	if err != nil {
-		t.Fatalf("CountUsers: %v", err)
+	if _, err := repo.OIDCOwner(ctx, "subject-1"); !errors.Is(err, storage.ErrUserNotFound) {
+		t.Fatalf("no account yet: %v", err)
 	}
-	if n != 0 {
-		t.Fatalf("got count %d, want 0 on a fresh DB", n)
+	if _, err := repo.SetupOIDC(ctx, "", "subject-1"); err != nil {
+		t.Fatal(err)
 	}
-
-	if _, err := repo.CreateWithPassword(ctx, "dave", "x"); err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+	if u, err := repo.OIDCOwner(ctx, "subject-1"); err != nil || u.Username != "subject-1" {
+		t.Fatalf("owner: %+v, %v", u, err)
 	}
-
-	n, err = repo.CountUsers(ctx)
-	if err != nil {
-		t.Fatalf("CountUsers: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("got count %d, want 1", n)
-	}
-}
-
-func TestGetOrCreateUserCreatesAndPromotesFirstUserToAdmin(t *testing.T) {
-	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
-	ctx := context.Background()
-
-	userID, created, err := repo.GetOrCreateUser(ctx, "subject-1", "alice")
-	if err != nil {
-		t.Fatalf("GetOrCreateUser: %v", err)
-	}
-	if !created {
-		t.Fatal("expected created=true for a new subject")
-	}
-
-	u, err := repo.GetByID(ctx, userID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if u.AuthMethod != model.AuthOIDC {
-		t.Fatalf("got auth method %q, want %q", u.AuthMethod, model.AuthOIDC)
-	}
-	if !u.IsAdmin {
-		t.Fatal("expected the first user (regardless of auth method) to be promoted to admin")
-	}
-}
-
-func TestGetOrCreateUserFindsExistingSubjectWithoutCreating(t *testing.T) {
-	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
-	ctx := context.Background()
-
-	firstID, _, err := repo.GetOrCreateUser(ctx, "subject-1", "alice")
-	if err != nil {
-		t.Fatalf("GetOrCreateUser (first call): %v", err)
-	}
-
-	secondID, created, err := repo.GetOrCreateUser(ctx, "subject-1", "alice")
-	if err != nil {
-		t.Fatalf("GetOrCreateUser (second call): %v", err)
-	}
-	if created {
-		t.Fatal("expected created=false when the subject already has a user")
-	}
-	if secondID != firstID {
-		t.Fatalf("got user ID %d, want %d (the existing user)", secondID, firstID)
-	}
-}
-
-func TestGetOrCreateUserDoesNotPromoteSecondUser(t *testing.T) {
-	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
-	ctx := context.Background()
-
-	if _, _, err := repo.GetOrCreateUser(ctx, "subject-1", "alice"); err != nil {
-		t.Fatalf("GetOrCreateUser (first): %v", err)
-	}
-
-	secondID, _, err := repo.GetOrCreateUser(ctx, "subject-2", "bob")
-	if err != nil {
-		t.Fatalf("GetOrCreateUser (second): %v", err)
-	}
-
-	u, err := repo.GetByID(ctx, secondID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if u.IsAdmin {
-		t.Fatal("expected only the first user ever created to be promoted to admin")
-	}
-}
-
-func TestGetOrCreateUserRejectsDisabledUser(t *testing.T) {
-	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
-	ctx := context.Background()
-
-	userID, _, err := repo.GetOrCreateUser(ctx, "subject-1", "alice")
-	if err != nil {
-		t.Fatalf("GetOrCreateUser: %v", err)
-	}
-	if err := repo.SetDisabled(ctx, userID, true); err != nil {
-		t.Fatalf("SetDisabled: %v", err)
-	}
-
-	_, _, err = repo.GetOrCreateUser(ctx, "subject-1", "alice")
-	if !errors.Is(err, model.ErrAccountDisabled) {
-		t.Fatalf("got err = %v, want ErrAccountDisabled", err)
-	}
-}
-
-func TestGetOrCreateUserFallsBackToSubjectOnUsernameCollision(t *testing.T) {
-	db, _ := newTestDB(t)
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewUserRepo(db, rootKey)
-	ctx := context.Background()
-
-	existing, err := repo.CreateWithPassword(ctx, "alice", "hashed-password")
-	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
-	}
-
-	userID, created, err := repo.GetOrCreateUser(ctx, "subject-1", "alice")
-	if err != nil {
-		t.Fatalf("GetOrCreateUser: %v", err)
-	}
-	if !created || userID == existing.ID {
-		t.Fatalf("got userID=%d created=%v, want a new user distinct from %d", userID, created, existing.ID)
-	}
-
-	u, err := repo.GetByID(ctx, userID)
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if u.Username != "subject-1" {
-		t.Fatalf("got username %q, want fallback to subject %q", u.Username, "subject-1")
-	}
-	if u.IsAdmin {
-		t.Fatal("expected a non-first user not to be promoted to admin")
+	if _, err := repo.OIDCOwner(ctx, "subject-2"); !errors.Is(err, storage.ErrNotOwner) {
+		t.Fatalf("other identity: %v, want ErrNotOwner", err)
 	}
 }

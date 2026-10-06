@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>first-run setup</h1>
-<p class="muted">No admin account exists yet. Create one to continue. You'll enroll TOTP in the next step.</p>
+<p class="muted">Create this instance's one account. You'll enroll TOTP in the next step.</p>
 <form class="stack" method="post" action="/setup">
     <label>setup token <span class="muted">(printed in the server log at startup)</span>
         <input type="password" name="setup_token" autocomplete="off" required autofocus>
@@ -11,7 +11,7 @@
     <label>password
         <input type="password" name="password" minlength="14" required>
     </label>
-    <button type="submit">create admin account</button>
+    <button type="submit">create account</button>
 </form>
 <p class="muted">— or <a href="/setup/oidc">configure OIDC</a> instead —</p>
 {{end}}

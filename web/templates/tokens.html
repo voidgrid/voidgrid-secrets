@@ -4,7 +4,7 @@
     <tr><th>id</th><th>description</th><th>created</th><th>expires</th><th>revoked</th><th>last used</th><th></th></tr>
     {{range .Tokens}}
     <tr>
-        <td><a href="/admin/tokens/{{.ID}}">{{.ID}}</a></td>
+        <td><a href="/tokens/{{.ID}}">{{.ID}}</a></td>
         <td>{{.Description}}</td>
         <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
         <td>{{if .ExpiresAt}}{{.ExpiresAt.Format "2006-01-02 15:04"}}{{end}}</td>
@@ -12,7 +12,7 @@
         <td>{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02 15:04"}}{{end}}</td>
         <td>
             {{if not .RevokedAt}}
-            <form class="inline-form" method="post" action="/admin/tokens/{{.ID}}/revoke">
+            <form class="inline-form" method="post" action="/tokens/{{.ID}}/revoke">
                 <button type="submit">revoke</button>
             </form>
             {{end}}
@@ -22,7 +22,7 @@
 </table>
 
 <h2>create token</h2>
-<form class="stack" method="post" action="/admin/tokens">
+<form class="stack" method="post" action="/tokens">
     <label>description
         <input type="text" name="description">
     </label>

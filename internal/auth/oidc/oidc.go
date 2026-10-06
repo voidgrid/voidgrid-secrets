@@ -14,15 +14,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/zitadel/oidc/v3/pkg/client/rp"
 	httphelper "github.com/zitadel/oidc/v3/pkg/http"
 	"github.com/zitadel/oidc/v3/pkg/oidc"
-
-	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
 // Config is the OIDC provider configuration, as stored by the setup wizard
@@ -82,39 +79,19 @@ func (c *Client) LoginHandler() http.HandlerFunc {
 	return rp.AuthURLHandler(State, c.rp)
 }
 
-// UserProvisioner maps an OIDC subject claim to a local user, creating one
-// just-in-time on first login if necessary. created reports whether this
-// call just created that user (vs. finding an existing one), so the
-// caller can decide whether this is a first-login event worth special
-// handling (e.g. issuing recovery codes).
-type UserProvisioner interface {
-	GetOrCreateUser(ctx context.Context, subject, preferredUsername string) (userID int64, created bool, err error)
-}
-
 // CallbackHandler returns an http.HandlerFunc for the OIDC provider's
 // redirect callback. It completes the code exchange (validating the state
-// and PKCE cookies LoginHandler set) and provisions (or finds) the local
-// user by subject, then hands off to onProvisioned, which owns everything
-// app-specific from there - creating a session, deciding whether a
-// first-login deserves a recovery-codes page instead of an immediate
-// redirect, and so on. Keeping that out of this package keeps it focused
-// on OIDC mechanics rather than the app's own session/recovery-code model.
+// and PKCE cookies LoginHandler set) and hands the verified identity -
+// subject and preferred username - to onIdentity, which owns everything
+// app-specific from there: claiming the account during setup, or checking
+// that this is the account's owner and creating a session.
 //
 // This is mounted as a raw net/http route rather than a huma operation,
 // since an OAuth redirect callback isn't a JSON request/response - the
 // same reasoning applies to LoginHandler.
-func (c *Client) CallbackHandler(users UserProvisioner, onProvisioned func(w http.ResponseWriter, r *http.Request, userID int64, created bool)) http.HandlerFunc {
+func (c *Client) CallbackHandler(onIdentity func(w http.ResponseWriter, r *http.Request, subject, preferredUsername string)) http.HandlerFunc {
 	return rp.CodeExchangeHandler(func(w http.ResponseWriter, r *http.Request, tokens *oidc.Tokens[*oidc.IDTokenClaims], state string, relyingParty rp.RelyingParty) {
 		claims := tokens.IDTokenClaims
-		userID, created, err := users.GetOrCreateUser(r.Context(), claims.Subject, claims.PreferredUsername)
-		if errors.Is(err, model.ErrAccountDisabled) {
-			http.Error(w, "this account is disabled", http.StatusForbidden)
-			return
-		}
-		if err != nil {
-			http.Error(w, "failed to provision user", http.StatusInternalServerError)
-			return
-		}
-		onProvisioned(w, r, userID, created)
+		onIdentity(w, r, claims.Subject, claims.PreferredUsername)
 	}, c.rp)
 }

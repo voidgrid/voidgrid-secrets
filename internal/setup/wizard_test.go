@@ -9,75 +9,69 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/setup"
 )
 
+// fakeUserStore holds at most one account, like the real one.
 type fakeUserStore struct {
-	users       map[string]model.UserAuthRecord
-	nextID      int64
-	totpSecrets map[int64]string
+	account *model.UserAuthRecord
 }
 
-func newFakeUserStore() *fakeUserStore {
-	return &fakeUserStore{users: map[string]model.UserAuthRecord{}, totpSecrets: map[int64]string{}}
+func (f *fakeUserStore) SetupPassword(_ context.Context, username, passwordHash string) (model.User, error) {
+	f.account = &model.UserAuthRecord{User: model.User{ID: 1, Username: username, AuthMethod: model.AuthPasswordTOTP}, PasswordHash: passwordHash}
+	return f.account.User, nil
 }
 
-func (f *fakeUserStore) CreateWithPassword(_ context.Context, username, passwordHash string) (model.User, error) {
-	if _, exists := f.users[username]; exists {
-		return model.User{}, errors.New("already exists")
+func (f *fakeUserStore) SetupOIDC(_ context.Context, username, subject string) (model.User, error) {
+	if username == "" {
+		username = subject
 	}
-	f.nextID++
-	u := model.User{ID: f.nextID, Username: username, AuthMethod: model.AuthPasswordTOTP}
-	f.users[username] = model.UserAuthRecord{User: u, PasswordHash: passwordHash}
-	return u, nil
+	f.account = &model.UserAuthRecord{User: model.User{ID: 1, Username: username, AuthMethod: model.AuthOIDC}, OIDCSubject: subject}
+	return f.account.User, nil
 }
 
-func (f *fakeUserStore) SetTOTPSecret(_ context.Context, userID int64, secret string) error {
-	f.totpSecrets[userID] = secret
-	for username, rec := range f.users {
-		if rec.ID == userID {
-			rec.TOTPSecret = secret
-			f.users[username] = rec
-		}
+func (f *fakeUserStore) SetTOTPSecret(_ context.Context, secret string) error {
+	if f.account == nil {
+		return errors.New("no account")
 	}
+	f.account.TOTPSecret = secret
 	return nil
 }
 
 func (f *fakeUserStore) GetAuthRecord(_ context.Context, username string) (model.UserAuthRecord, error) {
-	rec, ok := f.users[username]
-	if !ok {
+	if f.account == nil || f.account.Username != username {
 		return model.UserAuthRecord{}, errors.New("not found")
 	}
-	return rec, nil
-}
-
-func (f *fakeUserStore) CountUsers(_ context.Context) (int64, error) {
-	return int64(len(f.users)), nil
-}
-
-func (f *fakeUserStore) PromoteToAdmin(_ context.Context, userID int64) error {
-	for username, rec := range f.users {
-		if rec.ID == userID {
-			rec.IsAdmin = true
-			f.users[username] = rec
-		}
-	}
-	return nil
+	return *f.account, nil
 }
 
 type fakeAuthConfigStore struct {
 	complete bool
+	method   model.AuthMethod
 }
 
-func (f *fakeAuthConfigStore) IsComplete(_ context.Context) (bool, error) {
-	return f.complete, nil
-}
+func (f *fakeAuthConfigStore) IsComplete(_ context.Context) (bool, error) { return f.complete, nil }
 
 func (f *fakeAuthConfigStore) CompletePasswordTOTP(_ context.Context) error {
+	f.complete, f.method = true, model.AuthPasswordTOTP
+	return nil
+}
+
+func (f *fakeAuthConfigStore) SaveOIDC(_ context.Context, _, _, _, _ string) error {
+	f.method = model.AuthOIDC
+	return nil
+}
+
+func (f *fakeAuthConfigStore) CompleteOIDC(_ context.Context) error {
+	if f.method != model.AuthOIDC {
+		return errors.New("no pending OIDC config")
+	}
 	f.complete = true
 	return nil
 }
 
-func (f *fakeAuthConfigStore) CompleteOIDC(_ context.Context, _, _, _, _ string) error {
-	f.complete = true
-	return nil
+func (f *fakeAuthConfigStore) Get(_ context.Context) (model.AuthConfig, error) {
+	if f.method == "" {
+		return model.AuthConfig{}, errors.New("none")
+	}
+	return model.AuthConfig{AuthMethod: f.method, OIDCIssuer: "https://issuer.example"}, nil
 }
 
 type fakeRecoveryCodeStore struct {
@@ -94,143 +88,155 @@ func (f *fakeRecoveryCodeStore) ReplaceForUser(_ context.Context, userID int64, 
 
 const testSetupToken = "vgs_setup_test" //nolint:gosec // fake test fixture, not a real credential
 
-func newTestWizard() (*setup.Wizard, *fakeAuthConfigStore) {
-	users := newFakeUserStore()
-	authConfig := &fakeAuthConfigStore{}
-	w := &setup.Wizard{
+type fixture struct {
+	w      *setup.Wizard
+	users  *fakeUserStore
+	config *fakeAuthConfigStore
+	codes  *fakeRecoveryCodeStore
+}
+
+func newTestWizard() fixture {
+	f := fixture{users: &fakeUserStore{}, config: &fakeAuthConfigStore{}, codes: &fakeRecoveryCodeStore{}}
+	f.w = &setup.Wizard{
 		SetupToken:    testSetupToken,
-		Users:         users,
-		AuthConfig:    authConfig,
-		RecoveryCodes: &fakeRecoveryCodeStore{},
+		Users:         f.users,
+		AuthConfig:    f.config,
+		RecoveryCodes: f.codes,
 		GenerateTOTP: func(account string) (string, string, error) {
 			return "totp-secret-for-" + account, "otpauth://totp/x", nil
 		},
-		ValidateTOTP: func(code, secret string) bool { return code == "valid-code" },
+		ValidateTOTP: func(code, _ string) bool { return code == "valid-code" },
 		HashPassword: func(password string) (string, error) { return "hashed:" + password, nil },
 		GenerateRecoveryCodes: func() ([]string, error) {
 			return []string{"code-1", "code-2"}, nil
 		},
 		HashRecoveryCode: func(code string) string { return "hashed:" + code },
 	}
-	return w, authConfig
+	return f
 }
 
-func TestInitAndConfirmPasswordSetupCompletesWizard(t *testing.T) {
-	w, authConfig := newTestWizard()
+const callback = "https://app.example/login/oidc/callback"
+
+func TestPasswordSetupCompletesAfterConfirm(t *testing.T) {
+	f := newTestWizard()
 	ctx := context.Background()
 
-	secret, uri, err := w.InitPasswordSetup(ctx, testSetupToken, "admin", "hunter2")
-	if err != nil {
-		t.Fatalf("InitPasswordSetup: %v", err)
+	secret, uri, err := f.w.InitPasswordSetup(ctx, testSetupToken, "owner", "hunter2")
+	if err != nil || secret == "" || uri == "" {
+		t.Fatalf("InitPasswordSetup = %q, %q, %v", secret, uri, err)
 	}
-	if secret == "" || uri == "" {
-		t.Fatal("expected a non-empty secret and provisioning URI")
+	if f.config.complete {
+		t.Fatal("setup complete before TOTP was confirmed")
 	}
-
-	complete, err := w.IsComplete(ctx)
-	if err != nil {
-		t.Fatalf("IsComplete: %v", err)
+	codes, err := f.w.ConfirmPasswordSetup(ctx, testSetupToken, "owner", "valid-code")
+	if err != nil || len(codes) == 0 {
+		t.Fatalf("ConfirmPasswordSetup = %v, %v", codes, err)
 	}
-	if complete {
-		t.Fatal("expected setup to still be incomplete before confirmation")
-	}
-
-	codes, err := w.ConfirmPasswordSetup(ctx, testSetupToken, "admin", "valid-code")
-	if err != nil {
-		t.Fatalf("ConfirmPasswordSetup: %v", err)
-	}
-	if len(codes) == 0 {
-		t.Fatal("expected a non-empty batch of recovery codes")
-	}
-	if !authConfig.complete {
-		t.Fatal("expected setup to be marked complete")
+	if !f.config.complete || len(f.codes.codesByUser[1]) != 2 {
+		t.Fatal("setup not completed, or recovery codes not stored")
 	}
 }
 
-func TestConfirmPasswordSetupRejectsInvalidCode(t *testing.T) {
-	w, _ := newTestWizard()
+func TestPasswordSetupRejectsWrongCode(t *testing.T) {
+	f := newTestWizard()
+	ctx := context.Background()
+	if _, _, err := f.w.InitPasswordSetup(ctx, testSetupToken, "owner", "hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.w.ConfirmPasswordSetup(ctx, testSetupToken, "owner", "wrong-code"); !errors.Is(err, setup.ErrInvalidCode) {
+		t.Fatalf("err = %v, want ErrInvalidCode", err)
+	}
+}
+
+// An unfinished password setup (lost QR code) can simply be started again.
+func TestPasswordSetupCanRestartBeforeConfirming(t *testing.T) {
+	f := newTestWizard()
+	ctx := context.Background()
+	if _, _, err := f.w.InitPasswordSetup(ctx, testSetupToken, "first", "hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.w.InitPasswordSetup(ctx, testSetupToken, "second", "hunter3"); err != nil {
+		t.Fatalf("restarting setup: %v", err)
+	}
+	if f.users.account.Username != "second" {
+		t.Fatalf("account = %q, want the restarted one", f.users.account.Username)
+	}
+}
+
+func TestConfirmBeforeInitIsRefused(t *testing.T) {
+	f := newTestWizard()
+	if _, err := f.w.ConfirmPasswordSetup(context.Background(), testSetupToken, "owner", "valid-code"); !errors.Is(err, setup.ErrNotStarted) {
+		t.Fatalf("err = %v, want ErrNotStarted", err)
+	}
+}
+
+func TestOIDCSetupCompletesOnlyWhenClaimed(t *testing.T) {
+	f := newTestWizard()
 	ctx := context.Background()
 
-	if _, _, err := w.InitPasswordSetup(ctx, testSetupToken, "admin", "hunter2"); err != nil {
-		t.Fatalf("InitPasswordSetup: %v", err)
-	}
-
-	_, err := w.ConfirmPasswordSetup(ctx, testSetupToken, "admin", "wrong-code")
-	if !errors.Is(err, setup.ErrInvalidCode) {
-		t.Fatalf("got err = %v, want ErrInvalidCode", err)
-	}
-}
-
-func TestInitPasswordSetupRejectsSecondAdmin(t *testing.T) {
-	w, _ := newTestWizard()
-	ctx := context.Background()
-
-	if _, _, err := w.InitPasswordSetup(ctx, testSetupToken, "admin", "hunter2"); err != nil {
-		t.Fatalf("InitPasswordSetup: %v", err)
-	}
-
-	_, _, err := w.InitPasswordSetup(ctx, testSetupToken, "admin2", "hunter3")
-	if !errors.Is(err, setup.ErrAdminPending) {
-		t.Fatalf("got err = %v, want ErrAdminPending", err)
-	}
-}
-
-func TestInitPasswordSetupRejectsWhenAlreadyComplete(t *testing.T) {
-	w, authConfig := newTestWizard()
-	authConfig.complete = true
-
-	_, _, err := w.InitPasswordSetup(context.Background(), testSetupToken, "admin", "hunter2")
-	if !errors.Is(err, setup.ErrAlreadyComplete) {
-		t.Fatalf("got err = %v, want ErrAlreadyComplete", err)
-	}
-}
-
-func TestSetupOIDCRejectsWhenAlreadyComplete(t *testing.T) {
-	w, authConfig := newTestWizard()
-	authConfig.complete = true
-
-	err := w.SetupOIDC(context.Background(), testSetupToken, "https://issuer.example", "client-id", "client-secret", "https://app.example/login/oidc/callback")
-	if !errors.Is(err, setup.ErrAlreadyComplete) {
-		t.Fatalf("got err = %v, want ErrAlreadyComplete", err)
-	}
-}
-
-func TestSetupOIDCSucceeds(t *testing.T) {
-	w, authConfig := newTestWizard()
-
-	if err := w.SetupOIDC(context.Background(), testSetupToken, "https://issuer.example", "client-id", "client-secret", "https://app.example/login/oidc/callback"); err != nil {
+	if err := f.w.SetupOIDC(ctx, testSetupToken, "https://issuer.example", "id", "secret", callback); err != nil {
 		t.Fatalf("SetupOIDC: %v", err)
 	}
-	if !authConfig.complete {
-		t.Fatal("expected setup to be marked complete")
+	if f.config.complete {
+		t.Fatal("OIDC setup completed before anyone signed in")
+	}
+	user, codes, err := f.w.ClaimOIDC(ctx, testSetupToken, "subject-1", "owner")
+	if err != nil {
+		t.Fatalf("ClaimOIDC: %v", err)
+	}
+	if user.Username != "owner" || f.users.account.OIDCSubject != "subject-1" || len(codes) == 0 || !f.config.complete {
+		t.Fatalf("claim result: user %+v, codes %v, complete %v", user, codes, f.config.complete)
+	}
+	// Once claimed, setup is over: nobody else can claim.
+	if _, _, err := f.w.ClaimOIDC(ctx, testSetupToken, "subject-2", "intruder"); !errors.Is(err, setup.ErrAlreadyComplete) {
+		t.Fatalf("second claim: err = %v, want ErrAlreadyComplete", err)
+	}
+}
+
+func TestClaimBeforeOIDCConfigIsRefused(t *testing.T) {
+	f := newTestWizard()
+	if _, _, err := f.w.ClaimOIDC(context.Background(), testSetupToken, "subject-1", "owner"); !errors.Is(err, setup.ErrNotStarted) {
+		t.Fatalf("err = %v, want ErrNotStarted", err)
+	}
+}
+
+func TestSetupStepsRefusedOnceComplete(t *testing.T) {
+	f := newTestWizard()
+	f.config.complete = true
+	ctx := context.Background()
+	if _, _, err := f.w.InitPasswordSetup(ctx, testSetupToken, "owner", "hunter2"); !errors.Is(err, setup.ErrAlreadyComplete) {
+		t.Fatalf("InitPasswordSetup: %v", err)
+	}
+	if err := f.w.SetupOIDC(ctx, testSetupToken, "https://issuer.example", "id", "secret", callback); !errors.Is(err, setup.ErrAlreadyComplete) {
+		t.Fatalf("SetupOIDC: %v", err)
 	}
 }
 
 func TestEverySetupStepRequiresTheSetupToken(t *testing.T) {
-	w, authConfig := newTestWizard()
+	f := newTestWizard()
 	ctx := context.Background()
 
-	if _, _, err := w.InitPasswordSetup(ctx, "wrong", "admin", "hunter2"); !errors.Is(err, setup.ErrInvalidSetupToken) {
-		t.Fatalf("InitPasswordSetup with wrong token: err = %v", err)
-	}
-	if _, _, err := w.InitPasswordSetup(ctx, testSetupToken, "admin", "hunter2"); err != nil {
+	if _, _, err := f.w.InitPasswordSetup(ctx, "wrong", "owner", "hunter2"); !errors.Is(err, setup.ErrInvalidSetupToken) {
 		t.Fatalf("InitPasswordSetup: %v", err)
 	}
-	if _, err := w.ConfirmPasswordSetup(ctx, "", "admin", "valid-code"); !errors.Is(err, setup.ErrInvalidSetupToken) {
-		t.Fatalf("ConfirmPasswordSetup with no token: err = %v", err)
+	if _, err := f.w.ConfirmPasswordSetup(ctx, "", "owner", "valid-code"); !errors.Is(err, setup.ErrInvalidSetupToken) {
+		t.Fatalf("ConfirmPasswordSetup: %v", err)
 	}
-	if err := w.SetupOIDC(ctx, "wrong", "https://issuer.example", "id", "secret", "https://app.example/cb"); !errors.Is(err, setup.ErrInvalidSetupToken) {
-		t.Fatalf("SetupOIDC with wrong token: err = %v", err)
+	if err := f.w.SetupOIDC(ctx, "wrong", "https://issuer.example", "id", "secret", callback); !errors.Is(err, setup.ErrInvalidSetupToken) {
+		t.Fatalf("SetupOIDC: %v", err)
 	}
-	if authConfig.complete {
-		t.Fatal("setup completed without the token")
+	if _, _, err := f.w.ClaimOIDC(ctx, "wrong", "subject-1", "owner"); !errors.Is(err, setup.ErrInvalidSetupToken) {
+		t.Fatalf("ClaimOIDC: %v", err)
+	}
+	if f.config.complete || f.users.account != nil {
+		t.Fatal("something was set up without the token")
 	}
 }
 
 func TestSetupRefusedWhenNoTokenConfigured(t *testing.T) {
-	w, _ := newTestWizard()
-	w.SetupToken = ""
-	if err := w.CheckSetupToken(context.Background(), ""); !errors.Is(err, setup.ErrInvalidSetupToken) {
+	f := newTestWizard()
+	f.w.SetupToken = ""
+	if err := f.w.CheckSetupToken(context.Background(), ""); !errors.Is(err, setup.ErrInvalidSetupToken) {
 		t.Fatalf("empty configured token accepted an empty token: %v", err)
 	}
 }

@@ -57,7 +57,7 @@ func (r *SessionRepo) Authenticate(ctx context.Context, plaintext string) (model
 	hash := crypto.HashToken(plaintext)
 
 	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
-		Query: `SELECT s.user_id, s.expires_at, s.revoked_at, u.id, u.username, u.auth_method, u.disabled, u.is_admin, u.created_at
+		Query: `SELECT s.user_id, s.expires_at, s.revoked_at, u.id, u.username, u.auth_method, u.created_at
 			FROM sessions s JOIN users u ON u.id = s.user_id
 			WHERE s.session_hash = ?`,
 		Arguments: []interface{}{hash},
@@ -77,7 +77,7 @@ func (r *SessionRepo) Authenticate(ctx context.Context, plaintext string) (model
 		authMethod   string
 		createdAtRaw string
 	)
-	if err := qr.Scan(&userID, &expiresAtRaw, &revokedAt, &user.ID, &user.Username, &authMethod, &user.Disabled, &user.IsAdmin, &createdAtRaw); err != nil {
+	if err := qr.Scan(&userID, &expiresAtRaw, &revokedAt, &user.ID, &user.Username, &authMethod, &createdAtRaw); err != nil {
 		return model.User{}, fmt.Errorf("storage: scan session: %w", err)
 	}
 	user.AuthMethod = model.AuthMethod(authMethod)
@@ -97,10 +97,6 @@ func (r *SessionRepo) Authenticate(ctx context.Context, plaintext string) (model
 	user.CreatedAt, err = parseTimestamp(createdAtRaw)
 	if err != nil {
 		return model.User{}, fmt.Errorf("storage: parse user created_at: %w", err)
-	}
-
-	if user.Disabled {
-		return model.User{}, session.ErrInvalidSession
 	}
 
 	return user, nil
@@ -124,4 +120,14 @@ func (r *SessionRepo) Revoke(ctx context.Context, plaintext string) error {
 		return fmt.Errorf("storage: revoke session: %w", results[0].Err)
 	}
 	return nil
+}
+
+// RevokeAll ends every session of userID - used when the account is
+// recovered, so anyone holding an old session is signed out.
+func (r *SessionRepo) RevokeAll(ctx context.Context, userID int64) error {
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query:     `UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+		Arguments: []interface{}{nowTimestamp(), userID},
+	}})
+	return writeErr("revoke all sessions", results, err)
 }

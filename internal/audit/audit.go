@@ -19,46 +19,41 @@ const (
 	// ActorAnonymous is a request that hasn't authenticated as anyone:
 	// failed logins, setup attempts, rejected machine tokens.
 	ActorAnonymous = "anonymous"
-	// ActorSystem is the server itself (e.g. the startup encryption
-	// upgrade).
+	// ActorSystem is the server itself, or the break-glass command run
+	// inside its container.
 	ActorSystem = "system"
 )
 
-// Actions. Reads that don't reveal a value (lists, metadata) aren't
-// recorded; everything that reveals a value or changes something is.
+// Actions. Everything that reveals a value or changes something is
+// recorded, along with failed and refused attempts.
 const (
-	Login               = "login"
-	LoginFailed         = "login_failed"
-	LoginLockedOut      = "login_locked_out"
-	RecoveryLogin       = "recovery_login"
-	RecoveryLoginFailed = "recovery_login_failed"
-	Logout              = "logout"
-	TokenAuthFailed     = "token_auth_failed" //nolint:gosec // an action name, not a credential
+	Login           = "login"
+	LoginFailed     = "login_failed"
+	LoginLockedOut  = "login_locked_out"
+	Logout          = "logout"
+	TokenAuthFailed = "token_auth_failed" //nolint:gosec // an action name, not a credential
 
-	SetupTokenRejected = "setup_token_rejected" //nolint:gosec // an action name, not a credential
-	SetupAdminCreated  = "setup_admin_created"
-	SetupCompleted     = "setup_completed"
+	SetupTokenRejected  = "setup_token_rejected" //nolint:gosec // an action name, not a credential
+	SetupAccountCreated = "setup_account_created"
+	SetupCompleted      = "setup_completed"
+
+	RecoveryStarted   = "recovery_started"
+	RecoveryFailed    = "recovery_failed"
+	RecoveryCompleted = "recovery_completed"
+	BreakGlassIssued  = "break_glass_issued"
 
 	SecretCreate = "secret_create"
 	SecretUpdate = "secret_update"
+	SecretRename = "secret_rename"
+	SecretDelete = "secret_delete"
 	SecretReveal = "reveal"
 	AccessDenied = "access_denied"
-	ShareCreate  = "share_create"
-	ShareDelete  = "share_delete"
 
 	TokenCreate = "token_create"
 	TokenRevoke = "token_revoke"
 	TokenGrant  = "token_grant"
 
-	UserCreate  = "user_create"
-	UserDisable = "user_disable"
-	UserEnable  = "user_enable"
-
-	GroupCreate       = "group_create"
-	GroupMemberAdd    = "group_member_add"
-	GroupMemberRemove = "group_member_remove"
-
-	EncryptionUpgraded = "encryption_upgraded"
+	AuditPruned = "audit_pruned"
 )
 
 // Actor is who performed an action. ID is 0 for anonymous and system.

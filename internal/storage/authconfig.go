@@ -10,128 +10,121 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
-// AuthConfigRepo provides access to the singleton auth_config row, whose
-// presence marks the first-run setup wizard as complete. OIDC client
-// secrets are encrypted directly with the root key, for the same reason as
-// TOTP secrets in users.go: a single value per deployment, no benefit to a
-// per-item DEK.
+// AuthConfigRepo provides access to the singleton auth_config row. Setup
+// is complete once its completed_at is set. The OIDC client secret is
+// encrypted directly with the root key, for the same reason as the TOTP
+// secret in users.go: a single value per deployment.
 type AuthConfigRepo struct {
 	db      *DB
 	rootKey []byte
 }
 
-// NewAuthConfigRepo returns an AuthConfigRepo that encrypts OIDC client
-// secrets using rootKey.
+// NewAuthConfigRepo returns an AuthConfigRepo that encrypts the OIDC client
+// secret using rootKey.
 func NewAuthConfigRepo(db *DB, rootKey []byte) *AuthConfigRepo {
 	return &AuthConfigRepo{db: db, rootKey: rootKey}
 }
 
-// IsComplete reports whether the setup wizard has already run.
+// IsComplete reports whether setup has finished.
 func (r *AuthConfigRepo) IsComplete(ctx context.Context) (bool, error) {
-	qr, err := r.db.conn.QueryContext(ctx, []string{"SELECT COUNT(*) FROM auth_config WHERE id = 1"})
+	qr, err := r.db.conn.QueryOneContext(ctx, "SELECT COUNT(*) FROM auth_config WHERE id = 1 AND completed_at IS NOT NULL")
 	if err != nil {
 		return false, fmt.Errorf("storage: check setup completion: %w", err)
 	}
-	if len(qr) == 0 || !qr[0].Next() {
+	if !qr.Next() {
 		return false, fmt.Errorf("storage: check setup completion: no result")
 	}
 	var count int64
-	if err := qr[0].Scan(&count); err != nil {
+	if err := qr.Scan(&count); err != nil {
 		return false, fmt.Errorf("storage: check setup completion: %w", err)
 	}
 	return count > 0, nil
 }
 
-// CompletePasswordTOTP marks setup as complete using the password+TOTP
-// method.
+// CompletePasswordTOTP finishes setup with the password+TOTP method.
 func (r *AuthConfigRepo) CompletePasswordTOTP(ctx context.Context) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
-		{
-			Query:     `INSERT INTO auth_config (id, auth_method, completed_at) VALUES (1, 'password_totp', ?)`,
-			Arguments: []interface{}{nowTimestamp()},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("storage: complete password+TOTP setup: %w", err)
-	}
-	if results[0].Err != nil {
-		return fmt.Errorf("storage: complete password+TOTP setup: %w", results[0].Err)
-	}
-	return nil
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query: `INSERT INTO auth_config (id, auth_method, completed_at) VALUES (1, 'password_totp', ?)
+			ON CONFLICT (id) DO UPDATE SET auth_method = 'password_totp', oidc_issuer = NULL, oidc_client_id = NULL,
+				oidc_client_secret_enc = NULL, oidc_client_secret_nonce = NULL, oidc_redirect_uri = NULL,
+				completed_at = excluded.completed_at`,
+		Arguments: []interface{}{nowTimestamp()},
+	}})
+	return writeErr("complete password+TOTP setup", results, err)
 }
 
-// CompleteOIDC marks setup as complete using OIDC, storing the provider
-// config with the client secret encrypted. redirectURI is the exact
-// callback URL registered with the provider (e.g.
-// "https://secrets.example.com/login/oidc/callback") - OIDC providers
-// require it to match exactly, so it's stored rather than guessed later
-// from a request.
-func (r *AuthConfigRepo) CompleteOIDC(ctx context.Context, issuer, clientID, clientSecret, redirectURI string) error {
+// SaveOIDC stores the OIDC provider config, client secret encrypted,
+// without completing setup: that happens in CompleteOIDC, once the
+// operator has signed in through the provider. redirectURI is the exact
+// callback URL registered with the provider. Saving again (a corrected
+// config) replaces the pending one.
+func (r *AuthConfigRepo) SaveOIDC(ctx context.Context, issuer, clientID, clientSecret, redirectURI string) error {
 	ciphertext, nonce, err := crypto.Encrypt(r.rootKey, []byte(clientSecret))
 	if err != nil {
 		return fmt.Errorf("storage: encrypt OIDC client secret: %w", err)
 	}
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query: `INSERT INTO auth_config
+				(id, auth_method, oidc_issuer, oidc_client_id, oidc_client_secret_enc, oidc_client_secret_nonce, oidc_redirect_uri)
+				VALUES (1, 'oidc', ?, ?, ?, ?, ?)
+			ON CONFLICT (id) DO UPDATE SET auth_method = 'oidc', oidc_issuer = excluded.oidc_issuer,
+				oidc_client_id = excluded.oidc_client_id, oidc_client_secret_enc = excluded.oidc_client_secret_enc,
+				oidc_client_secret_nonce = excluded.oidc_client_secret_nonce, oidc_redirect_uri = excluded.oidc_redirect_uri,
+				completed_at = NULL`,
+		Arguments: []interface{}{issuer, clientID, b64enc(ciphertext), b64enc(nonce), redirectURI},
+	}})
+	return writeErr("save OIDC config", results, err)
+}
 
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
-		{
-			Query: `INSERT INTO auth_config
-				(id, auth_method, oidc_issuer, oidc_client_id, oidc_client_secret_enc, oidc_client_secret_nonce, oidc_redirect_uri, completed_at)
-				VALUES (1, 'oidc', ?, ?, ?, ?, ?, ?)`,
-			Arguments: []interface{}{issuer, clientID, b64enc(ciphertext), b64enc(nonce), redirectURI, nowTimestamp()},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("storage: complete OIDC setup: %w", err)
+// CompleteOIDC finishes an OIDC setup saved by SaveOIDC.
+func (r *AuthConfigRepo) CompleteOIDC(ctx context.Context) error {
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query:     `UPDATE auth_config SET completed_at = ? WHERE id = 1 AND auth_method = 'oidc' AND completed_at IS NULL`,
+		Arguments: []interface{}{nowTimestamp()},
+	}})
+	if err := writeErr("complete OIDC setup", results, err); err != nil {
+		return err
 	}
-	if results[0].Err != nil {
-		return fmt.Errorf("storage: complete OIDC setup: %w", results[0].Err)
+	if results[0].RowsAffected == 0 {
+		return fmt.Errorf("storage: complete OIDC setup: no pending OIDC config")
 	}
 	return nil
 }
 
-// Get returns the current auth configuration. Callers should check
-// IsComplete first; Get returns an error if setup hasn't run yet.
+// Get returns the stored auth configuration, complete or pending, or
+// ErrNotFound if setup hasn't stored any.
 func (r *AuthConfigRepo) Get(ctx context.Context) (model.AuthConfig, error) {
-	qr, err := r.db.conn.QueryContext(ctx, []string{
+	qr, err := r.db.conn.QueryOneContext(ctx,
 		`SELECT auth_method, oidc_issuer, oidc_client_id, oidc_client_secret_enc, oidc_client_secret_nonce, oidc_redirect_uri, completed_at
-			FROM auth_config WHERE id = 1`,
-	})
+			FROM auth_config WHERE id = 1`)
 	if err != nil {
 		return model.AuthConfig{}, fmt.Errorf("storage: get auth config: %w", err)
 	}
-	if len(qr) == 0 || !qr[0].Next() {
-		return model.AuthConfig{}, fmt.Errorf("storage: setup has not been completed yet")
+	if !qr.Next() {
+		return model.AuthConfig{}, fmt.Errorf("%w: no auth config yet", ErrNotFound)
 	}
 
 	var (
-		cfg             model.AuthConfig
-		authMethod      string
-		oidcIssuer      gorqlite.NullString
-		oidcClientID    gorqlite.NullString
-		oidcSecretEnc   gorqlite.NullString
-		oidcSecretNonce gorqlite.NullString
-		oidcRedirectURI gorqlite.NullString
-		completedAtRaw  string
+		cfg                                      model.AuthConfig
+		authMethod                               string
+		issuer, clientID, secretEnc, secretNonce gorqlite.NullString
+		redirectURI, completedAt                 gorqlite.NullString
 	)
-	if err := qr[0].Scan(&authMethod, &oidcIssuer, &oidcClientID, &oidcSecretEnc, &oidcSecretNonce, &oidcRedirectURI, &completedAtRaw); err != nil {
+	if err := qr.Scan(&authMethod, &issuer, &clientID, &secretEnc, &secretNonce, &redirectURI, &completedAt); err != nil {
 		return model.AuthConfig{}, fmt.Errorf("storage: scan auth config: %w", err)
 	}
 	cfg.AuthMethod = model.AuthMethod(authMethod)
-	cfg.OIDCIssuer = oidcIssuer.String
-	cfg.OIDCClientID = oidcClientID.String
-	cfg.OIDCRedirectURI = oidcRedirectURI.String
-
-	cfg.CompletedAt, err = parseTimestamp(completedAtRaw)
-	if err != nil {
+	cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCRedirectURI = issuer.String, clientID.String, redirectURI.String
+	if cfg.CompletedAt, err = parseNullableTimestamp(completedAt.String, completedAt.Valid); err != nil {
 		return model.AuthConfig{}, fmt.Errorf("storage: parse completed_at: %w", err)
 	}
 
-	if oidcSecretEnc.Valid && oidcSecretNonce.Valid {
-		ciphertext, err := b64dec(oidcSecretEnc.String)
+	if secretEnc.Valid && secretNonce.Valid {
+		ciphertext, err := b64dec(secretEnc.String)
 		if err != nil {
 			return model.AuthConfig{}, fmt.Errorf("storage: decode OIDC client secret: %w", err)
 		}
-		nonce, err := b64dec(oidcSecretNonce.String)
+		nonce, err := b64dec(secretNonce.String)
 		if err != nil {
 			return model.AuthConfig{}, fmt.Errorf("storage: decode OIDC client secret nonce: %w", err)
 		}
@@ -141,6 +134,5 @@ func (r *AuthConfigRepo) Get(ctx context.Context) (model.AuthConfig, error) {
 		}
 		cfg.OIDCClientSecret = string(plaintext)
 	}
-
 	return cfg, nil
 }

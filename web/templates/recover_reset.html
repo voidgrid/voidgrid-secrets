@@ -1,0 +1,22 @@
+{{define "content"}}
+<h1>reset your account</h1>
+{{if eq .AuthMethod "password_totp"}}
+<p class="muted">Choose a new password and add this to your authenticator app, then enter a code from it. Your old password, authenticator and recovery codes stop working.</p>
+<img src="{{.QRCodeDataURI}}" alt="TOTP enrollment QR code" width="240" height="240">
+<p>can't scan? secret: <code>{{.TOTPSecret}}</code></p>
+<form class="stack" method="post" action="/recover/reset">
+    <label>new password
+        <input type="password" name="password" minlength="14" autocomplete="new-password" required autofocus>
+    </label>
+    <label>code from the authenticator
+        <input type="text" name="totp_code" inputmode="numeric" pattern="[0-9]{6}" required>
+    </label>
+    <button type="submit">reset</button>
+</form>
+{{else}}
+<p class="muted">Your identity provider handles your password and 2FA. Finishing issues new recovery codes and signs out every session.</p>
+<form class="stack" method="post" action="/recover/reset">
+    <button type="submit">finish</button>
+</form>
+{{end}}
+{{end}}

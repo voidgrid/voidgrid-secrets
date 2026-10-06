@@ -8,15 +8,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/audit"
-	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
 
-// TokensHandler implements admin-only machine-token management. Mounted
-// under /api/v1/admin: machine tokens must never be able to manage other
-// tokens, so this is deliberately unreachable via bearer-token auth -
-// session + admin only.
+// TokensHandler implements machine-token management. It's session-only:
+// a machine token can never manage tokens.
 type TokensHandler struct {
 	tokens *storage.TokenRepo
 	audit  audit.Logger
@@ -27,47 +24,36 @@ func NewTokensHandler(tokens *storage.TokenRepo, auditLog audit.Logger) *TokensH
 	return &TokensHandler{tokens: tokens, audit: auditLog}
 }
 
-// RegisterTokens registers the admin token-management operations on api.
+// RegisterTokens registers the token-management operations on api.
 func RegisterTokens(api huma.API, h *TokensHandler) {
 	huma.Register(api, huma.Operation{
-		OperationID: "admin-list-tokens",
-		Method:      "GET",
-		Path:        "/admin/tokens",
-		Summary:     "List all machine tokens (never their plaintext values)",
-		Tags:        []string{"admin"},
+		OperationID: "list-tokens", Method: "GET", Path: "/tokens",
+		Summary: "List machine tokens (never their values)", Tags: []string{"tokens"},
 	}, h.List)
-
 	huma.Register(api, huma.Operation{
-		OperationID: "admin-create-token",
-		Method:      "POST",
-		Path:        "/admin/tokens",
-		Summary:     "Create a new machine token",
-		Tags:        []string{"admin"},
+		OperationID: "create-token", Method: "POST", Path: "/tokens",
+		Summary: "Create a machine token; its value is returned exactly once", Tags: []string{"tokens"},
 	}, h.Create)
-
 	huma.Register(api, huma.Operation{
-		OperationID: "admin-revoke-token",
-		Method:      "POST",
-		Path:        "/admin/tokens/{id}/revoke",
-		Summary:     "Revoke a machine token immediately",
-		Tags:        []string{"admin"},
+		OperationID: "get-token", Method: "GET", Path: "/tokens/{id}",
+		Summary: "Get a machine token and the secrets it's granted", Tags: []string{"tokens"},
+	}, h.Get)
+	huma.Register(api, huma.Operation{
+		OperationID: "revoke-token", Method: "POST", Path: "/tokens/{id}/revoke",
+		Summary: "Revoke a machine token permanently", Tags: []string{"tokens"},
 	}, h.Revoke)
-
 	huma.Register(api, huma.Operation{
-		OperationID: "admin-add-token-acl",
-		Method:      "POST",
-		Path:        "/admin/tokens/{id}/acls",
-		Summary:     "Grant a machine token permission on a secret or group",
-		Tags:        []string{"admin"},
-	}, h.AddACL)
+		OperationID: "grant-token", Method: "POST", Path: "/tokens/{id}/grants",
+		Summary:     "Grant a machine token read or write on a secret",
+		Description: "Granting the same secret again replaces the permission and environment variable name.",
+		Tags:        []string{"tokens"},
+	}, h.Grant)
 }
 
-// MachineTokenOut is the API representation of a machine token's metadata
-// (never its plaintext or hash).
+// MachineTokenOut is a token's metadata as returned by the API.
 type MachineTokenOut struct {
 	ID          int64      `json:"id"`
 	Description string     `json:"description"`
-	CreatedBy   int64      `json:"created_by"`
 	CreatedAt   time.Time  `json:"created_at"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
@@ -76,37 +62,33 @@ type MachineTokenOut struct {
 
 func toMachineTokenOut(mt model.MachineToken) MachineTokenOut {
 	return MachineTokenOut{
-		ID:          mt.ID,
-		Description: mt.Description,
-		CreatedBy:   mt.CreatedBy,
-		CreatedAt:   mt.CreatedAt,
-		ExpiresAt:   mt.ExpiresAt,
-		RevokedAt:   mt.RevokedAt,
-		LastUsedAt:  mt.LastUsedAt,
+		ID: mt.ID, Description: mt.Description, CreatedAt: mt.CreatedAt,
+		ExpiresAt: mt.ExpiresAt, RevokedAt: mt.RevokedAt, LastUsedAt: mt.LastUsedAt,
 	}
 }
 
-// ListTokensOutput wraps the full token list.
+// ListTokensOutput lists every token.
 type ListTokensOutput struct {
 	Body struct {
 		Tokens []MachineTokenOut `json:"tokens"`
 	}
 }
 
-// List returns every machine token's metadata.
+// List returns every machine token, newest first.
 func (h *TokensHandler) List(ctx context.Context, _ *EmptyInput) (*ListTokensOutput, error) {
 	tokens, err := h.tokens.List(ctx)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
 	out := &ListTokensOutput{}
+	out.Body.Tokens = []MachineTokenOut{}
 	for _, mt := range tokens {
 		out.Body.Tokens = append(out.Body.Tokens, toMachineTokenOut(mt))
 	}
 	return out, nil
 }
 
-// CreateTokenInput carries a new token's description and optional expiry.
+// CreateTokenInput describes a new token.
 type CreateTokenInput struct {
 	Body struct {
 		Description string     `json:"description"`
@@ -114,8 +96,7 @@ type CreateTokenInput struct {
 	}
 }
 
-// CreateTokenOutput carries the new token's plaintext value, shown exactly
-// once, and its metadata.
+// CreateTokenOutput carries the new token's value, shown only here.
 type CreateTokenOutput struct {
 	Body struct {
 		Token    string          `json:"token"`
@@ -123,18 +104,12 @@ type CreateTokenOutput struct {
 	}
 }
 
-// Create generates a new machine token, attributed to the calling admin.
+// Create makes a new machine token.
 func (h *TokensHandler) Create(ctx context.Context, in *CreateTokenInput) (*CreateTokenOutput, error) {
-	admin, ok := gosession.FromContext(ctx)
-	if !ok {
-		return nil, huma.Error401Unauthorized("authentication required")
-	}
-
-	plaintext, mt, err := h.tokens.Create(ctx, in.Body.Description, admin.ID, in.Body.ExpiresAt)
+	plaintext, mt, err := h.tokens.Create(ctx, in.Body.Description, in.Body.ExpiresAt)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
-
 	details := map[string]string{"description": mt.Description}
 	if mt.ExpiresAt != nil {
 		details["expires_at"] = mt.ExpiresAt.UTC().Format(time.RFC3339)
@@ -146,58 +121,87 @@ func (h *TokensHandler) Create(ctx context.Context, in *CreateTokenInput) (*Crea
 	return out, nil
 }
 
-// TokenIDInput identifies a token by its path ID.
+// TokenIDInput identifies a token.
 type TokenIDInput struct {
 	ID int64 `path:"id" doc:"Machine token ID"`
 }
 
-// RevokeTokenOutput is empty: success is signaled by a 2xx status.
-type RevokeTokenOutput struct{}
+// GrantOut is one secret a token is granted.
+type GrantOut struct {
+	SecretID   int64  `json:"secret_id"`
+	SecretName string `json:"secret_name"`
+	Permission string `json:"permission"`
+	// EnvName is the explicit environment variable name, or "" when it's
+	// derived from the secret's name.
+	EnvName string `json:"env_name,omitempty"`
+}
 
-// Revoke invalidates a machine token immediately.
-func (h *TokensHandler) Revoke(ctx context.Context, in *TokenIDInput) (*RevokeTokenOutput, error) {
+// GetTokenOutput is a token with its grants.
+type GetTokenOutput struct {
+	Body struct {
+		Token  MachineTokenOut `json:"token"`
+		Grants []GrantOut      `json:"grants"`
+	}
+}
+
+// Get returns a token and its grants.
+func (h *TokensHandler) Get(ctx context.Context, in *TokenIDInput) (*GetTokenOutput, error) {
+	mt, err := h.tokens.Get(ctx, in.ID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil, huma.Error404NotFound("no such token")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("internal error", err)
+	}
+	grants, err := h.tokens.ListGrants(ctx, in.ID)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("internal error", err)
+	}
+	out := &GetTokenOutput{}
+	out.Body.Token = toMachineTokenOut(mt)
+	out.Body.Grants = []GrantOut{}
+	for _, g := range grants {
+		out.Body.Grants = append(out.Body.Grants, GrantOut{SecretID: g.SecretID, SecretName: g.SecretName, Permission: g.Permission, EnvName: g.EnvName})
+	}
+	return out, nil
+}
+
+// Revoke revokes a token.
+func (h *TokensHandler) Revoke(ctx context.Context, in *TokenIDInput) (*struct{}, error) {
 	if err := h.tokens.Revoke(ctx, in.ID); err != nil {
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
 	audit.Record(ctx, h.audit, audit.Event{Actor: actorFrom(ctx), Action: audit.TokenRevoke, ResourceType: "token", ResourceID: in.ID})
-	return &RevokeTokenOutput{}, nil
+	return &struct{}{}, nil
 }
 
-// AddTokenACLInput carries the resource and permission to grant.
-type AddTokenACLInput struct {
+// GrantInput gives a token a permission on a secret.
+type GrantInput struct {
 	ID   int64 `path:"id" doc:"Machine token ID"`
 	Body struct {
-		ResourceType string `json:"resource_type" enum:"secret,group"`
-		ResourceID   int64  `json:"resource_id"`
-		Permission   string `json:"permission" enum:"read,write"`
-		EnvName      string `json:"env_name,omitempty" doc:"Secret grants only: the environment variable name 'voidgrid-secrets run' exposes this secret under. Omit to derive it from the secret's name (db-password -> DB_PASSWORD)."`
+		SecretID   int64  `json:"secret_id"`
+		Permission string `json:"permission" enum:"read,write"`
+		EnvName    string `json:"env_name,omitempty" doc:"The environment variable name 'voidgrid-secrets run' and the agent expose this secret under. Omit to derive it from the secret's name (db-password -> DB_PASSWORD)."`
 	}
 }
 
-// AddTokenACLOutput is empty: success is signaled by a 2xx status.
-type AddTokenACLOutput struct{}
-
-// AddACL grants a machine token permission on a secret or group.
-func (h *TokensHandler) AddACL(ctx context.Context, in *AddTokenACLInput) (*AddTokenACLOutput, error) {
-	if err := h.tokens.AddACL(ctx, in.ID, in.Body.ResourceType, in.Body.ResourceID, in.Body.Permission, in.Body.EnvName); err != nil {
-		switch {
-		case errors.Is(err, storage.ErrInvalidEnvName):
-			return nil, huma.Error400BadRequest(err.Error())
-		case errors.Is(err, storage.ErrEnvNameTaken):
-			return nil, huma.Error409Conflict(err.Error())
-		case errors.Is(err, storage.ErrSecretNotFound):
-			return nil, huma.Error404NotFound(err.Error())
-		case errors.Is(err, storage.ErrNotFound):
-			return nil, huma.Error404NotFound("no such token, secret or group")
-		}
+// Grant gives a token read or write on a secret.
+func (h *TokensHandler) Grant(ctx context.Context, in *GrantInput) (*struct{}, error) {
+	err := h.tokens.AddGrant(ctx, in.ID, in.Body.SecretID, in.Body.Permission, in.Body.EnvName)
+	switch {
+	case err == nil:
+	case errors.Is(err, storage.ErrInvalidEnvName):
+		return nil, huma.Error400BadRequest(err.Error())
+	case errors.Is(err, storage.ErrEnvNameTaken):
+		return nil, huma.Error409Conflict(err.Error())
+	case errors.Is(err, storage.ErrSecretNotFound), errors.Is(err, storage.ErrNotFound):
+		return nil, huma.Error404NotFound("no such token or secret")
+	default:
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
 	audit.Record(ctx, h.audit, audit.Event{
 		Actor: actorFrom(ctx), Action: audit.TokenGrant, ResourceType: "token", ResourceID: in.ID,
-		Details: map[string]string{
-			"resource_type": in.Body.ResourceType, "resource_id": itoa(in.Body.ResourceID),
-			"permission": in.Body.Permission, "env_name": in.Body.EnvName,
-		},
+		Details: map[string]string{"secret_id": itoa(in.Body.SecretID), "permission": in.Body.Permission, "env_name": in.Body.EnvName},
 	})
-	return &AddTokenACLOutput{}, nil
+	return &struct{}{}, nil
 }

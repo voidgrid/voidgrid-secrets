@@ -6,6 +6,7 @@
     <title>voidgrid-secrets</title>
     {{if .RefreshTo}}<meta http-equiv="refresh" content="0;url={{.RefreshTo}}">{{end}}
     <link rel="stylesheet" href="/static/terminal.css">
+    <script src="/static/app.js" defer></script>
 </head>
 <body>
     <header class="topbar">
@@ -13,7 +14,8 @@
         {{if .User}}
         <nav>
             <a href="/secrets">secrets</a>
-            {{if .User.IsAdmin}}<a href="/admin/users">users</a><a href="/admin/groups">groups</a><a href="/admin/tokens">tokens</a><a href="/admin/audit">audit</a>{{end}}
+            <a href="/tokens">tokens</a>
+            <a href="/audit">audit</a>
             <span class="muted">{{.User.Username}}</span>
             <form class="inline-form" method="post" action="/logout"><button type="submit">logout</button></form>
         </nav>

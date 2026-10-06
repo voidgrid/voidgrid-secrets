@@ -1,86 +1,108 @@
 package storage_test
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
-	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
 
-// TestSecretRoundTrip is the Phase 2 walking skeleton: it proves
-// create secret -> encrypted row in rqlite -> read back -> decrypt works
-// end-to-end against a real rqlite instance before anything else (auth,
-// API, UI) is built on top of this layer.
-func TestSecretRoundTrip(t *testing.T) {
-	db, baseURL := newTestDB(t)
-	userID := insertTestUser(t, baseURL, "walking-skeleton")
+func TestSecretLifecycle(t *testing.T) {
+	db, _ := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewSecretRepo(db, make([]byte, crypto.KeySize))
 
-	rootKey := make([]byte, crypto.KeySize)
-	for i := range rootKey {
-		rootKey[i] = byte(i)
-	}
-	repo := storage.NewSecretRepo(db, rootKey)
-
-	plaintext := []byte("sk-super-secret-api-key")
-	created, err := repo.Create(context.Background(), model.OwnerUser, userID, "my-api-key", plaintext, userID)
+	s, err := repo.Create(ctx, "db-password", []byte("v1"))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if created.ID == 0 {
-		t.Fatal("expected a non-zero secret ID")
+	if got, err := repo.Reveal(ctx, s.ID); err != nil || string(got) != "v1" {
+		t.Fatalf("Reveal = %q, %v", got, err)
 	}
-	if created.Name != "my-api-key" {
-		t.Fatalf("got name %q, want %q", created.Name, "my-api-key")
-	}
-	if created.OwnerType != model.OwnerUser || created.OwnerID != userID {
-		t.Fatalf("got owner (%s, %d), want (%s, %d)", created.OwnerType, created.OwnerID, model.OwnerUser, userID)
-	}
-	if created.CreatedAt.IsZero() {
-		t.Fatal("expected CreatedAt to be populated")
+	if _, err := repo.Create(ctx, "db-password", []byte("x")); !errors.Is(err, storage.ErrSecretNameTaken) {
+		t.Fatalf("duplicate name: %v", err)
 	}
 
-	fetched, err := repo.Get(context.Background(), created.ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
+	if _, err := repo.Update(ctx, s.ID, []byte("v2")); err != nil {
+		t.Fatal(err)
 	}
-	if fetched != created {
-		t.Fatalf("Get returned %+v, want %+v", fetched, created)
+	if got, _ := repo.Reveal(ctx, s.ID); string(got) != "v2" {
+		t.Fatalf("after update: %q", got)
 	}
 
-	revealed, err := repo.Reveal(context.Background(), created.ID)
+	other, err := repo.Create(ctx, "api-key", []byte("k"))
 	if err != nil {
-		t.Fatalf("Reveal: %v", err)
+		t.Fatal(err)
 	}
-	if !bytes.Equal(revealed, plaintext) {
-		t.Fatalf("revealed %q, want %q", revealed, plaintext)
+	if _, err := repo.Rename(ctx, s.ID, "api-key"); !errors.Is(err, storage.ErrSecretNameTaken) {
+		t.Fatalf("rename onto a taken name: %v", err)
+	}
+	renamed, err := repo.Rename(ctx, s.ID, "postgres-password")
+	if err != nil || renamed.Name != "postgres-password" {
+		t.Fatalf("Rename = %+v, %v", renamed, err)
+	}
+	// The encryption is bound to the id, not the name: still readable.
+	if got, _ := repo.Reveal(ctx, s.ID); string(got) != "v2" {
+		t.Fatalf("after rename: %q", got)
+	}
+
+	list, err := repo.List(ctx)
+	if err != nil || len(list) != 2 || list[0].Name != "api-key" {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+
+	if err := repo.Delete(ctx, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Reveal(ctx, other.ID); !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("deleted secret: %v", err)
+	}
+	if err := repo.Delete(ctx, other.ID); !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("second delete: %v", err)
 	}
 }
 
-// TestSecretRevealFailsWithWrongRootKey proves that a secret encrypted
-// under one root key cannot be decrypted by a repository configured with a
-// different root key, i.e. the root key genuinely gates access.
 func TestSecretRevealFailsWithWrongRootKey(t *testing.T) {
-	db, baseURL := newTestDB(t)
-	userID := insertTestUser(t, baseURL, "wrong-key-user")
-
-	rootKey := make([]byte, crypto.KeySize)
-	repo := storage.NewSecretRepo(db, rootKey)
-
-	created, err := repo.Create(context.Background(), model.OwnerUser, userID, "secret", []byte("value"), userID)
+	db, _ := newTestDB(t)
+	ctx := context.Background()
+	key := make([]byte, crypto.KeySize)
+	s, err := storage.NewSecretRepo(db, key).Create(ctx, "s", []byte("value"))
 	if err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatal(err)
 	}
-
-	wrongKey := make([]byte, crypto.KeySize)
-	for i := range wrongKey {
-		wrongKey[i] = 0xFF
+	other := make([]byte, crypto.KeySize)
+	other[0] = 1
+	if _, err := storage.NewSecretRepo(db, other).Reveal(ctx, s.ID); err == nil {
+		t.Fatal("revealed with the wrong root key")
 	}
-	otherRepo := storage.NewSecretRepo(db, wrongKey)
+}
 
-	if _, err := otherRepo.Reveal(context.Background(), created.ID); err == nil {
-		t.Fatal("expected Reveal with the wrong root key to fail, got nil error")
+// Someone with database write access (but not the root key) copies one
+// secret's encrypted columns onto another: it must not decrypt there.
+func TestSecretEncryptionIsBoundToItsRow(t *testing.T) {
+	db, baseURL := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewSecretRepo(db, make([]byte, crypto.KeySize))
+	a, err := repo.Create(ctx, "a", []byte("value-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := repo.Create(ctx, "b", []byte("value-b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawExec(t, baseURL, `UPDATE secrets SET
+		wrapped_dek = (SELECT wrapped_dek FROM secrets WHERE id = ?),
+		dek_nonce = (SELECT dek_nonce FROM secrets WHERE id = ?),
+		ciphertext = (SELECT ciphertext FROM secrets WHERE id = ?),
+		value_nonce = (SELECT value_nonce FROM secrets WHERE id = ?)
+		WHERE id = ?`, b.ID, b.ID, b.ID, b.ID, a.ID)
+	if got, err := repo.Reveal(ctx, a.ID); err == nil {
+		t.Fatalf("swapped columns decrypted as %q", got)
+	}
+	if got, err := repo.Reveal(ctx, b.ID); err != nil || string(got) != "value-b" {
+		t.Fatalf("Reveal(b) = %q, %v", got, err)
 	}
 }

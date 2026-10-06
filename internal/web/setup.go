@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	oidcclient "github.com/voidgrid/voidgrid-secrets/internal/auth/oidc"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
@@ -183,7 +184,42 @@ func (h *SetupHandler) SubmitOIDCSetup(w http.ResponseWriter, r *http.Request) {
 
 	h.oidcProvider.Set(client)
 
+	// Setup finishes when the operator signs in through the provider; the
+	// setup token rides along in a short-lived cookie so the callback can
+	// prove this sign-in started here.
+	http.SetCookie(w, &http.Cookie{
+		Name: setupCookie, Value: setupToken, Path: "/", MaxAge: int(setupCookieTTL / time.Second),
+		HttpOnly: true, Secure: true,
+		// Lax, not Strict: it has to arrive on the provider's redirect
+		// back, which is a cross-site navigation.
+		SameSite: http.SameSiteLaxMode,
+	})
 	render(w, http.StatusOK, "setup_oidc_done", setupInitPage{})
+}
+
+// setupCookie carries the setup token through the OIDC sign-in that
+// finishes setup.
+const (
+	setupCookie    = "vgs_setup"
+	setupCookieTTL = 15 * time.Minute
+)
+
+// StartOIDCClaim begins the OIDC sign-in that finishes setup.
+func (h *SetupHandler) StartOIDCClaim(w http.ResponseWriter, r *http.Request) {
+	if _, err := r.Cookie(setupCookie); err != nil {
+		http.Redirect(w, r, "/setup/oidc", http.StatusSeeOther)
+		return
+	}
+	client, ok := h.oidcProvider.Get()
+	if !ok {
+		http.Redirect(w, r, "/setup/oidc", http.StatusSeeOther)
+		return
+	}
+	client.LoginHandler()(w, r)
+}
+
+func clearSetupCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: setupCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 }
 
 // suggestedRedirectURI builds a best-guess callback URL from the

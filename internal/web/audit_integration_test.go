@@ -4,75 +4,92 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
-	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
-func TestWebAuditViewerShowsEntriesToAdminsOnly(t *testing.T) {
+func ownerSession(t *testing.T, e env) *http.Cookie {
+	t.Helper()
+	tok, _, err := e.sessions.Create(context.Background(), 1, gosession.DefaultTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Cookie{Name: gosession.CookieName, Value: tok} //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
+}
+
+func get(t *testing.T, e env, path string, c *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if c != nil {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestWebAuditRecordsOnlyActualReveals(t *testing.T) {
 	e := newEnv(t)
 	completeSetupDirect(t, e)
-	ctx := context.Background()
-
-	admin, err := e.users.CreateWithPassword(ctx, "viewer-admin", "x")
+	cookie := ownerSession(t, e)
+	secret, err := e.secrets.Create(context.Background(), "viewer-secret", []byte("viewer-value"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.users.PromoteToAdmin(ctx, admin.ID); err != nil {
-		t.Fatal(err)
-	}
-	plain, err := e.users.CreateWithPassword(ctx, "viewer-plain", "x")
-	if err != nil {
-		t.Fatal(err)
-	}
-	secret, err := e.secrets.Create(ctx, model.OwnerUser, admin.ID, "viewer-secret", []byte("viewer-value"), admin.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cookieFor := func(userID int64) *http.Cookie {
-		tok, _, err := e.sessions.Create(ctx, userID, gosession.DefaultTTL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return &http.Cookie{Name: gosession.CookieName, Value: tok} //nolint:gosec // request cookie in a test; Secure/HttpOnly/SameSite are response-cookie attributes and don't apply here
-	}
-	get := func(path string, c *http.Cookie) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.AddCookie(c)
-		rec := httptest.NewRecorder()
-		e.handler.ServeHTTP(rec, req)
-		return rec
-	}
-	adminCookie := cookieFor(admin.ID)
+	id := strconv.FormatInt(secret.ID, 10)
 
-	// Reveal through the UI, which records an entry.
-	if rec := get("/secrets/"+strconv.FormatInt(secret.ID, 10)+"/reveal", adminCookie); rec.Code != http.StatusOK {
-		t.Fatalf("reveal: %d", rec.Code)
+	// Opening the page is not a reveal.
+	get(t, e, "/secrets/"+id, cookie)
+	if page := get(t, e, "/audit?action=reveal", cookie).Body.String(); strings.Contains(page, "viewer-secret") {
+		t.Fatal("opening the secret's page was recorded as a reveal")
 	}
-
-	rec := get("/admin/audit", adminCookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("admin view: %d %s", rec.Code, rec.Body.String())
+	// Clicking show is.
+	if rec := get(t, e, "/secrets/"+id+"/value", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("value: %d", rec.Code)
 	}
-	body := rec.Body.String()
-	for _, want := range []string{"reveal", "viewer-secret", "user viewer-admin #"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("audit page missing %q", want)
-		}
+	page := get(t, e, "/audit?action=reveal", cookie).Body.String()
+	if !strings.Contains(page, "viewer-secret") || !strings.Contains(page, "via=web") {
+		t.Fatalf("reveal not recorded: %s", page)
 	}
-	if strings.Contains(body, "viewer-value") {
+	if strings.Contains(page, "viewer-value") {
 		t.Fatal("audit page shows a secret value")
 	}
-
-	filtered := get("/admin/audit?action=login_failed", adminCookie).Body.String()
-	if strings.Contains(filtered, "viewer-secret") {
-		t.Fatal("action filter ignored")
+	if rec := get(t, e, "/audit", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("audit without a session: %d", rec.Code)
 	}
+}
 
-	if rec := get("/admin/audit", cookieFor(plain.ID)); rec.Code != http.StatusForbidden {
-		t.Fatalf("non-admin view: %d", rec.Code)
+func TestWebSecretRenameAndDelete(t *testing.T) {
+	e := newEnv(t)
+	completeSetupDirect(t, e)
+	cookie := ownerSession(t, e)
+	ctx := context.Background()
+	secret, err := e.secrets.Create(ctx, "old-name", []byte("v"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.secrets.Create(ctx, "taken", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	id := strconv.FormatInt(secret.ID, 10)
+
+	if rec := doForm(t, e.handler, "/secrets/"+id+"/rename", url.Values{"name": {"taken"}}, cookie); rec.Code != http.StatusConflict {
+		t.Fatalf("rename onto a taken name: %d", rec.Code)
+	}
+	if rec := doForm(t, e.handler, "/secrets/"+id+"/rename", url.Values{"name": {"new-name"}}, cookie); rec.Code != http.StatusSeeOther {
+		t.Fatalf("rename: %d", rec.Code)
+	}
+	if got, _ := e.secrets.Get(ctx, secret.ID); got.Name != "new-name" {
+		t.Fatalf("name = %q", got.Name)
+	}
+	if rec := doForm(t, e.handler, "/secrets/"+id+"/delete", url.Values{}, cookie); rec.Code != http.StatusSeeOther {
+		t.Fatalf("delete: %d", rec.Code)
+	}
+	if rec := get(t, e, "/secrets/"+id, cookie); rec.Code != http.StatusNotFound {
+		t.Fatalf("after delete: %d", rec.Code)
 	}
 }

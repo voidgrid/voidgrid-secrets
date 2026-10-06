@@ -14,11 +14,11 @@ import (
 type fakeAuthenticator struct {
 	wantToken string
 	token     model.MachineToken
-	acls      []model.TokenACL
+	acls      []model.TokenGrant
 	err       error
 }
 
-func (f fakeAuthenticator) Authenticate(_ context.Context, plaintext string) (model.MachineToken, []model.TokenACL, error) {
+func (f fakeAuthenticator) Authenticate(_ context.Context, plaintext string) (model.MachineToken, []model.TokenGrant, error) {
 	if plaintext != f.wantToken {
 		return model.MachineToken{}, nil, token.ErrInvalidToken
 	}
@@ -60,10 +60,10 @@ func TestMiddlewareRejectsInvalidToken(t *testing.T) {
 
 func TestMiddlewareAcceptsValidTokenAndPopulatesContext(t *testing.T) {
 	wantMT := model.MachineToken{ID: 42, Description: "ci runner"}
-	wantACLs := []model.TokenACL{{TokenID: 42, ResourceType: "secret", ResourceID: 1, Permission: "read"}}
+	wantACLs := []model.TokenGrant{{TokenID: 42, SecretID: 1, Permission: "read"}}
 
 	var gotMT model.MachineToken
-	var gotACLs []model.TokenACL
+	var gotACLs []model.TokenGrant
 	var gotOK bool
 
 	h := token.Middleware(fakeAuthenticator{wantToken: "vgs_good", token: wantMT, acls: wantACLs})(

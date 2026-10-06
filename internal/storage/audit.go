@@ -63,8 +63,8 @@ func (r *AuditRepo) Log(ctx context.Context, e audit.Event) error {
 	return nil
 }
 
-// AuditEntry is one audit log row, with the names of its actor and
-// resource looked up (empty if they no longer exist or don't apply).
+// AuditEntry is one audit log row, with the name of a token or secret it
+// refers to looked up (empty if it no longer exists or doesn't apply).
 type AuditEntry struct {
 	ID           int64             `json:"id"`
 	At           time.Time         `json:"at"`
@@ -80,11 +80,9 @@ type AuditEntry struct {
 
 // AuditFilter narrows List. Zero values match everything.
 type AuditFilter struct {
-	Action       string
-	ActorType    string
-	ActorID      int64
-	ResourceType string
-	ResourceID   int64
+	Action string
+	// TokenID matches entries where that token acted or was acted on.
+	TokenID int64
 	// BeforeID returns only entries older than this id (for paging).
 	BeforeID int64
 	// Limit defaults to 100 and is capped at 500.
@@ -97,27 +95,17 @@ func (r *AuditRepo) List(ctx context.Context, f AuditFilter) ([]AuditEntry, erro
 		where []string
 		args  []interface{}
 	)
-	add := func(cond string, arg interface{}) {
-		where = append(where, cond)
-		args = append(args, arg)
-	}
 	if f.Action != "" {
-		add("a.action = ?", f.Action)
+		where = append(where, "a.action = ?")
+		args = append(args, f.Action)
 	}
-	if f.ActorType != "" {
-		add("a.actor_type = ?", f.ActorType)
-	}
-	if f.ActorID != 0 {
-		add("a.actor_id = ?", f.ActorID)
-	}
-	if f.ResourceType != "" {
-		add("a.resource_type = ?", f.ResourceType)
-	}
-	if f.ResourceID != 0 {
-		add("a.resource_id = ?", f.ResourceID)
+	if f.TokenID != 0 {
+		where = append(where, "((a.actor_type = 'token' AND a.actor_id = ?) OR (a.resource_type = 'token' AND a.resource_id = ?))")
+		args = append(args, f.TokenID, f.TokenID)
 	}
 	if f.BeforeID != 0 {
-		add("a.id < ?", f.BeforeID)
+		where = append(where, "a.id < ?")
+		args = append(args, f.BeforeID)
 	}
 	limit := f.Limit
 	if limit <= 0 {
@@ -134,8 +122,6 @@ func (r *AuditRepo) List(ctx context.Context, f AuditFilter) ([]AuditEntry, erro
 			END,
 			CASE a.resource_type
 				WHEN 'secret' THEN (SELECT name FROM secrets WHERE id = a.resource_id)
-				WHEN 'user' THEN (SELECT username FROM users WHERE id = a.resource_id)
-				WHEN 'group' THEN (SELECT name FROM groups WHERE id = a.resource_id)
 				WHEN 'token' THEN (SELECT description FROM machine_tokens WHERE id = a.resource_id)
 			END
 		FROM audit_log a`
@@ -152,10 +138,9 @@ func (r *AuditRepo) List(ctx context.Context, f AuditFilter) ([]AuditEntry, erro
 	entries := []AuditEntry{}
 	for qr.Next() {
 		var (
-			e            AuditEntry
-			atRaw, meta  string
-			actorName    gorqlite.NullString
-			resourceName gorqlite.NullString
+			e                       AuditEntry
+			atRaw, meta             string
+			actorName, resourceName gorqlite.NullString
 		)
 		if err := qr.Scan(&e.ID, &atRaw, &e.ActorType, &e.ActorID, &e.Action, &e.ResourceType, &e.ResourceID, &meta, &actorName, &resourceName); err != nil {
 			return nil, fmt.Errorf("storage: scan audit entry: %w", err)
@@ -165,8 +150,19 @@ func (r *AuditRepo) List(ctx context.Context, f AuditFilter) ([]AuditEntry, erro
 		}
 		e.ActorName, e.ResourceName = actorName.String, resourceName.String
 		e.Details = map[string]string{}
-		_ = json.Unmarshal([]byte(meta), &e.Details) // rows from before details were recorded hold "{}"
+		_ = json.Unmarshal([]byte(meta), &e.Details)
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// Prune deletes entries recorded before cutoff and returns how many.
+func (r *AuditRepo) Prune(ctx context.Context, cutoff time.Time) (int64, error) {
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query: `DELETE FROM audit_log WHERE created_at < ?`, Arguments: []interface{}{formatTimestamp(cutoff)},
+	}})
+	if err := writeErr("prune audit log", results, err); err != nil {
+		return 0, err
+	}
+	return results[0].RowsAffected, nil
 }

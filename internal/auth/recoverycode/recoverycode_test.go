@@ -2,6 +2,7 @@ package recoverycode_test
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/recoverycode"
@@ -35,6 +36,20 @@ func TestGenerateFormatsWithHyphenGroups(t *testing.T) {
 	for _, c := range codes {
 		if !pattern.MatchString(c) {
 			t.Fatalf("code %q doesn't match expected format", c)
+		}
+	}
+}
+
+func TestNormalizeAcceptsCasualTyping(t *testing.T) {
+	codes, err := recoverycode.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := codes[0]
+	casual := strings.ToLower(strings.ReplaceAll(want, "-", ""))
+	for _, in := range []string{want, casual, " " + casual + " ", strings.ReplaceAll(want, "-", " ")} {
+		if got := recoverycode.Normalize(in); got != want {
+			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

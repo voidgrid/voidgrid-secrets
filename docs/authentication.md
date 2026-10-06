@@ -1,9 +1,14 @@
 # Authentication
 
-The web UI supports one sign-in method per deployment, chosen once in the
-first-run setup wizard: **password + TOTP**, or **OIDC**. Automated
-consumers never use either - they use machine tokens (see
-[deployment.md](deployment.md)).
+voidgrid-secrets has **one account**: yours. The setup wizard creates it,
+and it can do everything - manage secrets and machine tokens, and read the
+audit log. Automated consumers never sign in; they use machine tokens
+(see [deployment.md](deployment.md)).
+
+The account signs in with one method, chosen once during setup:
+**password + TOTP**, or **OIDC**.
+
+## Setup
 
 Until setup is complete, every page redirects to `/setup`. Every setup
 step needs the **setup token** the server prints to its log at startup
@@ -11,21 +16,21 @@ step needs the **setup token** the server prints to its log at startup
 someone who can read that log can run it. Wrong tokens are refused (403)
 and recorded in the [audit log](audit-log.md).
 
-## Password + TOTP
+### Password + TOTP
 
 At `/setup`:
 
-1. Enter the setup token and create the admin account. Passwords must be
-   at least 14 characters.
+1. Enter the setup token, a username, and a password of at least 14
+   characters.
 2. Scan the QR code with an authenticator app (or enter the secret shown
    beneath it), then confirm with a current code. TOTP is always
-   required for password accounts; there is no way to skip it.
+   required; there is no way to skip it.
 3. Save the **recovery codes** shown next - see below.
 
-Admins can create further password accounts at `/admin/users`; each gets
-its own TOTP enrollment, shown once.
+Lost the QR code before confirming? Start again at `/setup`; the
+unfinished account is replaced.
 
-## OIDC
+### OIDC
 
 At `/setup`, choose "configure OIDC" (or go to `/setup/oidc`), then enter:
 
@@ -39,73 +44,67 @@ At `/setup`, choose "configure OIDC" (or go to `/setup/oidc`), then enter:
   `/login/oidc/callback`, e.g. `https://secrets.example.com/login/oidc/callback`,
   and must match what you register with the provider exactly.
 
-Setup checks the issuer by performing OIDC discovery before saving
-anything, so a wrong or unreachable issuer fails right there.
+Setup checks the issuer with OIDC discovery before saving anything, so a
+wrong or unreachable issuer fails right there. Then **sign in through the
+provider once** (the link on the next page, valid for 15 minutes): that
+identity becomes the account, setup finishes, and you're shown your
+recovery codes.
 
-Register the client with your provider with that same callback URL. The
-client requests the `openid`, `profile`, and `email` scopes and uses the
-authorization code flow with PKCE. With Pocket ID, restrict the client to
-the group(s) of people who should have access: **anyone the provider
-lets sign in to this client gets an account**, created automatically on
-their first login.
+Register the client with the same callback URL. It requests the `openid`,
+`profile` and `email` scopes and uses the authorization code flow with
+PKCE. After setup, **only the identity that finished setup can sign in**;
+anyone else your provider lets through is refused (and recorded in the
+audit log as a failed sign-in).
 
-- The **first person to sign in becomes the admin.**
-- Each new OIDC user is shown a batch of **recovery codes** on their first
-  sign-in.
-- A local username comes from the provider's `preferred_username` claim,
-  falling back to the provider's subject ID if that's missing or already
-  taken by another account.
-- Disabling a user (admin > users) blocks their OIDC sign-in too.
+## Recovery
 
-## Recovery codes
+If you lose your password or authenticator - or your OIDC provider is
+unreachable - go to **`/recover`** (linked from the sign-in page) and
+enter one of your **recovery codes**:
 
-Recovery codes are the fallback for both methods: a lost authenticator
-device, or an OIDC provider that's down. At `/login/recovery`, sign in
-with your username and one code.
+- For a password account you then choose a new password and enroll a new
+  authenticator. For an OIDC account nothing else is needed.
+- Either way you get a **fresh set of recovery codes** (the old ones stop
+  working) and **every session is signed out**.
+- A recovery code doesn't sign you in by itself; it only starts this
+  reset, which must be finished within 15 minutes.
 
-- You get 10 codes, **shown exactly once** - save them somewhere safe.
-- Each code works one time only.
-- Only a hash is stored; nobody can retrieve them later.
+Recovery codes:
 
-Who receives codes:
+- 10 per set, **shown exactly once** - save them somewhere safe.
+- Each works once. Only hashes are stored; nobody can retrieve them.
+- They're accepted in any case, with or without the hyphens.
 
-- The admin created by the password + TOTP setup wizard.
-- Every OIDC user, on their first sign-in.
+### Break-glass: when the recovery codes are gone too
 
-Not yet supported: password accounts created later by an admin don't
-receive recovery codes, and there's no way to generate a new batch once
-codes are used up or lost.
+Run this inside the server's container:
+
+```
+docker exec voidgrid-secrets voidgrid-secrets recover
+```
+
+It prints a one-time code (valid 15 minutes) that works at `/recover`
+exactly like a recovery code. Only someone who can run commands in the
+container can do this - the same person who can read the setup token, the
+root key and the database anyway. It's recorded in the audit log.
 
 ## Sessions
 
 Web sessions last 24 hours and use a `Secure`, `HttpOnly`,
-`SameSite=Strict` cookie, which is why the UI needs HTTPS. Logging out
-ends the session on the server.
+`SameSite=Strict` cookie, which is why the UI needs HTTPS. Signing out
+ends the session on the server; a recovery ends all of them.
 
 Form submissions and API calls made with a session cookie are refused
-(403) when the browser marks them as coming from another origin - including
-another subdomain of the same domain, which `SameSite=Strict` alone would
-let through. Scripts and machine tokens, which send no such headers, are
-unaffected.
+(403) when the browser marks them as coming from another origin -
+including another subdomain of the same domain, which `SameSite=Strict`
+alone would let through. Scripts and machine tokens, which send no such
+headers, are unaffected.
 
-## Failed sign-ins
+## Failed attempts
 
-After 10 failed sign-ins for one username within 15 minutes, further
-password and recovery-code sign-ins for that username are refused (429)
-until the 15 minutes are up, even with the right credentials. Sessions
-already open and OIDC sign-in aren't affected. Anyone who knows a username
-can trigger this on purpose, so an account can be kept locked out of
-password sign-in that way.
-
-## Admins can read every secret
-
-Admins don't see other users' secrets in their own secrets list, and the
-web UI won't reveal them. But an admin manages machine tokens, and can
-grant a token read on **any** secret by its id - including another user's
-private secret - then read it through that token. The token's page also
-shows the names of the secrets it's granted.
-
-Treat admin as full access to everything stored here, and only make
-someone an admin if you'd trust them with every secret. Every grant an
-admin makes, and every value a token reads, is recorded in the
-[audit log](audit-log.md).
+After 10 failed sign-ins within 15 minutes, password sign-in is refused
+(429) until the 15 minutes are up, even with the right credentials; the
+same applies, separately, to 10 wrong codes at `/recover`. Sessions
+already open and OIDC sign-in aren't affected. Anyone who can reach the
+instance can trigger a lockout on purpose, so password sign-in (or
+recovery) can be kept unavailable that way while it lasts.

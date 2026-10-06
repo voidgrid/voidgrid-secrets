@@ -6,181 +6,158 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rqlite/gorqlite"
+
 	authtoken "github.com/voidgrid/voidgrid-secrets/internal/auth/token"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
 
-func createTestSecret(t *testing.T, db *storage.DB, ownerID int64, name string) model.Secret {
+func rawExec(t *testing.T, baseURL, query string, args ...interface{}) {
 	t.Helper()
-	repo := storage.NewSecretRepo(db, make([]byte, crypto.KeySize))
-	s, err := repo.Create(context.Background(), model.OwnerUser, ownerID, name, []byte("value-of-"+name), ownerID)
+	conn, err := gorqlite.Open(baseURL)
+	if err != nil {
+		t.Fatalf("open raw connection: %v", err)
+	}
+	defer conn.Close()
+	res, err := conn.WriteParameterizedContext(context.Background(), []gorqlite.ParameterizedStatement{{Query: query, Arguments: args}})
+	if err != nil || res[0].Err != nil {
+		t.Fatalf("exec %q: %v", query, err)
+	}
+}
+
+func createTestSecret(t *testing.T, db *storage.DB, name string) model.Secret {
+	t.Helper()
+	s, err := storage.NewSecretRepo(db, make([]byte, crypto.KeySize)).Create(context.Background(), name, []byte("value-of-"+name))
 	if err != nil {
 		t.Fatalf("create secret %q: %v", name, err)
 	}
 	return s
 }
 
-func TestTokenRepoCreateAndAuthenticate(t *testing.T) {
-	db, baseURL := newTestDB(t)
-	userID := insertTestUser(t, baseURL, "token-owner")
-	repo := storage.NewTokenRepo(db)
-
-	plaintext, mt, err := repo.Create(context.Background(), "ci runner", userID, nil)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if mt.ID == 0 {
-		t.Fatal("expected a non-zero token ID")
-	}
-	if mt.Description != "ci runner" {
-		t.Fatalf("got description %q, want %q", mt.Description, "ci runner")
-	}
-	if mt.RevokedAt != nil || mt.ExpiresAt != nil {
-		t.Fatalf("expected a fresh token to have no revoked/expires timestamps, got %+v", mt)
-	}
-
-	secret := createTestSecret(t, db, userID, "ci-secret")
-	if err := repo.AddACL(context.Background(), mt.ID, "secret", secret.ID, "read", ""); err != nil {
-		t.Fatalf("AddACL: %v", err)
-	}
-
-	gotMT, acls, err := repo.Authenticate(context.Background(), plaintext)
-	if err != nil {
-		t.Fatalf("Authenticate: %v", err)
-	}
-	if gotMT.ID != mt.ID {
-		t.Fatalf("got token ID %d, want %d", gotMT.ID, mt.ID)
-	}
-	if len(acls) != 1 || !authtoken.CanAccess(acls, "secret", secret.ID, "read") {
-		t.Fatalf("expected ACL granting read on secret %d, got %+v", secret.ID, acls)
-	}
-	if gotMT.LastUsedAt == nil {
-		t.Fatal("expected LastUsedAt to be set after Authenticate")
-	}
-}
-
-func TestTokenRepoAuthenticateRejectsWrongToken(t *testing.T) {
-	db, baseURL := newTestDB(t)
-	userID := insertTestUser(t, baseURL, "token-owner-2")
-	repo := storage.NewTokenRepo(db)
-
-	if _, _, err := repo.Create(context.Background(), "x", userID, nil); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	_, _, err := repo.Authenticate(context.Background(), "vgs_this-token-does-not-exist")
-	if !errors.Is(err, authtoken.ErrInvalidToken) {
-		t.Fatalf("got err = %v, want ErrInvalidToken", err)
-	}
-}
-
-func TestTokenRepoAuthenticateRejectsRevoked(t *testing.T) {
-	db, baseURL := newTestDB(t)
-	userID := insertTestUser(t, baseURL, "token-owner-3")
-	repo := storage.NewTokenRepo(db)
-
-	plaintext, mt, err := repo.Create(context.Background(), "x", userID, nil)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if err := repo.Revoke(context.Background(), mt.ID); err != nil {
-		t.Fatalf("Revoke: %v", err)
-	}
-
-	_, _, err = repo.Authenticate(context.Background(), plaintext)
-	if !errors.Is(err, authtoken.ErrInvalidToken) {
-		t.Fatalf("got err = %v, want ErrInvalidToken", err)
-	}
-}
-
-func TestTokenRepoAuthenticateRejectsExpired(t *testing.T) {
-	db, baseURL := newTestDB(t)
-	userID := insertTestUser(t, baseURL, "token-owner-4")
-	repo := storage.NewTokenRepo(db)
-
-	past := time.Now().Add(-time.Hour)
-	plaintext, _, err := repo.Create(context.Background(), "x", userID, &past)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	_, _, err = repo.Authenticate(context.Background(), plaintext)
-	if !errors.Is(err, authtoken.ErrInvalidToken) {
-		t.Fatalf("got err = %v, want ErrInvalidToken", err)
-	}
-}
-
-func TestTokenRepoEnvGrantsUseExplicitOrDerivedNames(t *testing.T) {
-	db, baseURL := newTestDB(t)
-	userID := insertTestUser(t, baseURL, "env-owner")
-	repo := storage.NewTokenRepo(db)
+func TestTokenAuthenticateRejectsWrongRevokedAndExpired(t *testing.T) {
+	db, _ := newTestDB(t)
 	ctx := context.Background()
+	repo := storage.NewTokenRepo(db)
 
-	_, mt, err := repo.Create(ctx, "svc", userID, nil)
+	plaintext, mt, err := repo.Create(ctx, "ci runner", nil)
+	if err != nil || mt.Description != "ci runner" {
+		t.Fatalf("Create = %+v, %v", mt, err)
+	}
+	got, grants, err := repo.Authenticate(ctx, plaintext)
+	if err != nil || got.ID != mt.ID || len(grants) != 0 || got.LastUsedAt == nil {
+		t.Fatalf("Authenticate = %+v, %v, %v", got, grants, err)
+	}
+	if _, _, err := repo.Authenticate(ctx, plaintext+"x"); !errors.Is(err, authtoken.ErrInvalidToken) {
+		t.Fatalf("wrong token: %v", err)
+	}
+
+	past := time.Now().Add(-time.Minute)
+	expired, _, err := repo.Create(ctx, "expired", &past)
 	if err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatal(err)
 	}
-	dbPass := createTestSecret(t, db, userID, "db-password")
-	apiKey := createTestSecret(t, db, userID, "api-key")
-
-	if err := repo.AddACL(ctx, mt.ID, "secret", dbPass.ID, "read", "POSTGRES_PASSWORD"); err != nil {
-		t.Fatalf("AddACL explicit: %v", err)
-	}
-	if err := repo.AddACL(ctx, mt.ID, "secret", apiKey.ID, "write", ""); err != nil {
-		t.Fatalf("AddACL derived: %v", err)
+	if _, _, err := repo.Authenticate(ctx, expired); !errors.Is(err, authtoken.ErrInvalidToken) {
+		t.Fatalf("expired token: %v", err)
 	}
 
-	grants, err := repo.EnvGrants(ctx, mt.ID)
-	if err != nil {
-		t.Fatalf("EnvGrants: %v", err)
+	if err := repo.Revoke(ctx, mt.ID); err != nil {
+		t.Fatal(err)
 	}
-	got := map[int64]string{}
-	for _, g := range grants {
-		got[g.SecretID] = g.EnvName
-	}
-	if got[dbPass.ID] != "POSTGRES_PASSWORD" || got[apiKey.ID] != "API_KEY" || len(got) != 2 {
-		t.Fatalf("got env names %v, want POSTGRES_PASSWORD and API_KEY", got)
+	if _, _, err := repo.Authenticate(ctx, plaintext); !errors.Is(err, authtoken.ErrInvalidToken) {
+		t.Fatalf("revoked token: %v", err)
 	}
 }
 
-func TestTokenRepoAddACLRejectsEnvNameProblems(t *testing.T) {
-	db, baseURL := newTestDB(t)
-	userID := insertTestUser(t, baseURL, "env-owner-2")
-	repo := storage.NewTokenRepo(db)
+func TestTokenGrantsUseExplicitOrDerivedNames(t *testing.T) {
+	db, _ := newTestDB(t)
 	ctx := context.Background()
-
-	_, mt, err := repo.Create(ctx, "svc", userID, nil)
+	repo := storage.NewTokenRepo(db)
+	dbPass := createTestSecret(t, db, "db-password")
+	apiKey := createTestSecret(t, db, "api-key")
+	_, mt, err := repo.Create(ctx, "svc", nil)
 	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	first := createTestSecret(t, db, userID, "db-password")
-	second := createTestSecret(t, db, userID, "other")
-	third := createTestSecret(t, db, userID, "third")
-
-	if err := repo.AddACL(ctx, mt.ID, "secret", first.ID, "read", ""); err != nil {
-		t.Fatalf("AddACL: %v", err)
+		t.Fatal(err)
 	}
 
-	if err := repo.AddACL(ctx, mt.ID, "secret", second.ID, "read", "DB_PASSWORD"); !errors.Is(err, storage.ErrEnvNameTaken) {
-		t.Errorf("explicit name colliding with a derived one: got %v, want ErrEnvNameTaken", err)
+	if err := repo.AddGrant(ctx, mt.ID, dbPass.ID, "read", "POSTGRES_PASSWORD"); err != nil {
+		t.Fatal(err)
 	}
-	if err := repo.AddACL(ctx, mt.ID, "secret", third.ID, "read", "lower-case"); !errors.Is(err, storage.ErrInvalidEnvName) {
-		t.Errorf("invalid name: got %v, want ErrInvalidEnvName", err)
+	if err := repo.AddGrant(ctx, mt.ID, apiKey.ID, "write", ""); err != nil {
+		t.Fatal(err)
 	}
-	if err := repo.AddACL(ctx, mt.ID, "group", 1, "read", "SOME_NAME"); !errors.Is(err, storage.ErrInvalidEnvName) {
-		t.Errorf("env name on a group grant: got %v, want ErrInvalidEnvName", err)
+	env, err := repo.EnvGrants(ctx, mt.ID)
+	if err != nil || len(env) != 2 {
+		t.Fatalf("EnvGrants = %+v, %v", env, err)
 	}
-	if err := repo.AddACL(ctx, mt.ID, "secret", 999999, "read", ""); !errors.Is(err, storage.ErrSecretNotFound) {
-		t.Errorf("nonexistent secret: got %v, want ErrSecretNotFound", err)
+	names := map[int64]string{}
+	for _, g := range env {
+		names[g.SecretID] = g.EnvName
+	}
+	if names[dbPass.ID] != "POSTGRES_PASSWORD" || names[apiKey.ID] != "API_KEY" {
+		t.Fatalf("env names = %v", names)
 	}
 
-	grants, err := repo.EnvGrants(ctx, mt.ID)
+	// Granting the same secret again replaces the grant rather than
+	// conflicting with itself.
+	if err := repo.AddGrant(ctx, mt.ID, apiKey.ID, "read", ""); err != nil {
+		t.Fatalf("re-grant: %v", err)
+	}
+	grants, _ := repo.ListGrants(ctx, mt.ID)
+	if len(grants) != 2 {
+		t.Fatalf("grants after re-grant = %+v", grants)
+	}
+}
+
+func TestTokenGrantProblemsAreRefused(t *testing.T) {
+	db, _ := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewTokenRepo(db)
+	a := createTestSecret(t, db, "a")
+	b := createTestSecret(t, db, "b")
+	_, mt, err := repo.Create(ctx, "svc", nil)
 	if err != nil {
-		t.Fatalf("EnvGrants: %v", err)
+		t.Fatal(err)
 	}
-	if len(grants) != 1 {
-		t.Fatalf("expected only the first grant to have been stored, got %+v", grants)
+	if err := repo.AddGrant(ctx, mt.ID, a.ID, "read", "SAME"); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"invalid env name", repo.AddGrant(ctx, mt.ID, b.ID, "read", "bad-name"), storage.ErrInvalidEnvName},
+		{"name taken on this token", repo.AddGrant(ctx, mt.ID, b.ID, "read", "SAME"), storage.ErrEnvNameTaken},
+		{"missing secret", repo.AddGrant(ctx, mt.ID, 9999, "read", "X"), storage.ErrNotFound},
+		{"missing secret, derived name", repo.AddGrant(ctx, mt.ID, 9999, "read", ""), storage.ErrSecretNotFound},
+		{"missing token", repo.AddGrant(ctx, 9999, b.ID, "read", "X"), storage.ErrNotFound},
+	}
+	for _, c := range cases {
+		if !errors.Is(c.err, c.want) {
+			t.Errorf("%s: err = %v, want %v", c.name, c.err, c.want)
+		}
+	}
+}
+
+func TestDeletingASecretRemovesItsGrants(t *testing.T) {
+	db, _ := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewTokenRepo(db)
+	s := createTestSecret(t, db, "doomed")
+	_, mt, err := repo.Create(ctx, "svc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddGrant(ctx, mt.ID, s.ID, "read", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.NewSecretRepo(db, make([]byte, crypto.KeySize)).Delete(ctx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if grants, err := repo.ListGrants(ctx, mt.ID); err != nil || len(grants) != 0 {
+		t.Fatalf("grants after delete = %+v, %v", grants, err)
 	}
 }

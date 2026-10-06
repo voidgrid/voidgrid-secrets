@@ -17,9 +17,9 @@ func TestSessionRepoCreateAndAuthenticate(t *testing.T) {
 	sessionRepo := storage.NewSessionRepo(db)
 	ctx := context.Background()
 
-	user, err := userRepo.CreateWithPassword(ctx, "alice", "x")
+	user, err := userRepo.SetupPassword(ctx, "alice", "x")
 	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+		t.Fatalf("SetupPassword: %v", err)
 	}
 
 	plaintext, expiresAt, err := sessionRepo.Create(ctx, user.ID, time.Hour)
@@ -55,9 +55,9 @@ func TestSessionRepoAuthenticateRejectsExpired(t *testing.T) {
 	sessionRepo := storage.NewSessionRepo(db)
 	ctx := context.Background()
 
-	user, err := userRepo.CreateWithPassword(ctx, "bob", "x")
+	user, err := userRepo.SetupPassword(ctx, "bob", "x")
 	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+		t.Fatalf("SetupPassword: %v", err)
 	}
 
 	plaintext, _, err := sessionRepo.Create(ctx, user.ID, -time.Hour)
@@ -77,9 +77,9 @@ func TestSessionRepoAuthenticateRejectsRevoked(t *testing.T) {
 	sessionRepo := storage.NewSessionRepo(db)
 	ctx := context.Background()
 
-	user, err := userRepo.CreateWithPassword(ctx, "carol", "x")
+	user, err := userRepo.SetupPassword(ctx, "carol", "x")
 	if err != nil {
-		t.Fatalf("CreateWithPassword: %v", err)
+		t.Fatalf("SetupPassword: %v", err)
 	}
 
 	plaintext, _, err := sessionRepo.Create(ctx, user.ID, time.Hour)

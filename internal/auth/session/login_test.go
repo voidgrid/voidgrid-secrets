@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
-	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
@@ -37,19 +36,6 @@ type fakeSessionCreator struct {
 
 func (f fakeSessionCreator) Create(_ context.Context, _ int64, _ time.Duration) (string, time.Time, error) {
 	return f.token, f.expiresAt, f.err
-}
-
-type fakeRecoveryCodeConsumer struct {
-	validHash string
-	used      bool
-}
-
-func (f *fakeRecoveryCodeConsumer) Consume(_ context.Context, _ int64, codeHash string) (bool, error) {
-	if f.used || codeHash != f.validHash {
-		return false, nil
-	}
-	f.used = true
-	return true, nil
 }
 
 func validLoginService(rec model.UserAuthRecord) *session.LoginService {
@@ -133,19 +119,6 @@ func TestLoginRejectsMissingTOTPEnrollmentEvenWithCorrectPassword(t *testing.T) 
 	}
 }
 
-func TestLoginRejectsDisabledUser(t *testing.T) {
-	svc := validLoginService(model.UserAuthRecord{
-		User:         model.User{ID: 1, AuthMethod: model.AuthPasswordTOTP, Disabled: true},
-		PasswordHash: "correct-password",
-		TOTPSecret:   "123456",
-	})
-
-	_, _, err := svc.Login(context.Background(), "alice", "correct-password", "123456")
-	if !errors.Is(err, session.ErrInvalidCredentials) {
-		t.Fatalf("got err = %v, want ErrInvalidCredentials", err)
-	}
-}
-
 func TestLoginRejectsOIDCOnlyUser(t *testing.T) {
 	svc := validLoginService(model.UserAuthRecord{
 		User: model.User{ID: 1, AuthMethod: model.AuthOIDC},
@@ -166,67 +139,6 @@ func TestLoginRejectsUnknownUser(t *testing.T) {
 	}
 
 	_, _, err := svc.Login(context.Background(), "nobody", "x", "123456")
-	if !errors.Is(err, session.ErrInvalidCredentials) {
-		t.Fatalf("got err = %v, want ErrInvalidCredentials", err)
-	}
-}
-
-func TestLoginWithRecoveryCodeSucceedsRegardlessOfAuthMethod(t *testing.T) {
-	for _, method := range []model.AuthMethod{model.AuthPasswordTOTP, model.AuthOIDC} {
-		svc := &session.LoginService{
-			Users:         &fakeUserLookup{rec: model.UserAuthRecord{User: model.User{ID: 1, AuthMethod: method}}},
-			Sessions:      fakeSessionCreator{token: "vgs_sess_abc", expiresAt: time.Now().Add(time.Hour)}, //nolint:gosec // fake test fixture, not a real credential
-			RecoveryCodes: &fakeRecoveryCodeConsumer{validHash: crypto.HashToken("ABCDE-FGHIJ")},
-		}
-
-		tok, _, err := svc.LoginWithRecoveryCode(context.Background(), "alice", "ABCDE-FGHIJ")
-		if err != nil {
-			t.Fatalf("auth method %q: LoginWithRecoveryCode: %v", method, err)
-		}
-		if tok != "vgs_sess_abc" {
-			t.Fatalf("auth method %q: got token %q, want %q", method, tok, "vgs_sess_abc")
-		}
-	}
-}
-
-func TestLoginWithRecoveryCodeIsSingleUse(t *testing.T) {
-	svc := &session.LoginService{
-		Users:         &fakeUserLookup{rec: model.UserAuthRecord{User: model.User{ID: 1, AuthMethod: model.AuthPasswordTOTP}}},
-		Sessions:      fakeSessionCreator{token: "vgs_sess_abc", expiresAt: time.Now().Add(time.Hour)}, //nolint:gosec // fake test fixture, not a real credential
-		RecoveryCodes: &fakeRecoveryCodeConsumer{validHash: crypto.HashToken("ABCDE-FGHIJ")},
-	}
-
-	if _, _, err := svc.LoginWithRecoveryCode(context.Background(), "alice", "ABCDE-FGHIJ"); err != nil {
-		t.Fatalf("first use: %v", err)
-	}
-
-	_, _, err := svc.LoginWithRecoveryCode(context.Background(), "alice", "ABCDE-FGHIJ")
-	if !errors.Is(err, session.ErrInvalidCredentials) {
-		t.Fatalf("got err = %v, want ErrInvalidCredentials (code already used)", err)
-	}
-}
-
-func TestLoginWithRecoveryCodeRejectsWrongCode(t *testing.T) {
-	svc := &session.LoginService{
-		Users:         &fakeUserLookup{rec: model.UserAuthRecord{User: model.User{ID: 1, AuthMethod: model.AuthPasswordTOTP}}},
-		Sessions:      fakeSessionCreator{token: "vgs_sess_abc", expiresAt: time.Now().Add(time.Hour)}, //nolint:gosec // fake test fixture, not a real credential
-		RecoveryCodes: &fakeRecoveryCodeConsumer{validHash: crypto.HashToken("ABCDE-FGHIJ")},
-	}
-
-	_, _, err := svc.LoginWithRecoveryCode(context.Background(), "alice", "WRONG-CODE")
-	if !errors.Is(err, session.ErrInvalidCredentials) {
-		t.Fatalf("got err = %v, want ErrInvalidCredentials", err)
-	}
-}
-
-func TestLoginWithRecoveryCodeRejectsDisabledUser(t *testing.T) {
-	svc := &session.LoginService{
-		Users:         &fakeUserLookup{rec: model.UserAuthRecord{User: model.User{ID: 1, AuthMethod: model.AuthPasswordTOTP, Disabled: true}}},
-		Sessions:      fakeSessionCreator{token: "vgs_sess_abc", expiresAt: time.Now().Add(time.Hour)}, //nolint:gosec // fake test fixture, not a real credential
-		RecoveryCodes: &fakeRecoveryCodeConsumer{validHash: crypto.HashToken("ABCDE-FGHIJ")},
-	}
-
-	_, _, err := svc.LoginWithRecoveryCode(context.Background(), "alice", "ABCDE-FGHIJ")
 	if !errors.Is(err, session.ErrInvalidCredentials) {
 		t.Fatalf("got err = %v, want ErrInvalidCredentials", err)
 	}

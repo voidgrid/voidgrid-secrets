@@ -109,7 +109,7 @@ func insertTestUser(t *testing.T, baseURL, username string) int64 {
 
 	wr, err := conn.WriteParameterizedContext(context.Background(), []gorqlite.ParameterizedStatement{
 		{
-			Query:     `INSERT INTO users (username, auth_method, password_hash) VALUES (?, 'password_totp', 'x')`,
+			Query:     `INSERT INTO users (id, username, auth_method, password_hash, created_at) VALUES (1, ?, 'password_totp', 'x', '2026-01-01T00:00:00.000Z')`,
 			Arguments: []interface{}{username},
 		},
 	})

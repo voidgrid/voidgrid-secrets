@@ -28,18 +28,6 @@ func requireSession(authr session.Authenticator) func(http.Handler) http.Handler
 	}
 }
 
-// requireAdmin must be chained after requireSession.
-func requireAdmin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := session.FromContext(r.Context())
-		if !ok || !user.IsAdmin {
-			http.Error(w, "admin access required", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // setupChecker reports whether the first-run setup wizard has completed.
 type setupChecker interface {
 	IsComplete(ctx context.Context) (bool, error)

@@ -14,21 +14,16 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
-// ErrInvalidEnvName is returned by AddACL for an environment variable name
-// that isn't uppercase letters, digits and underscores, or for an env name
-// on a group grant (env names only apply to secret grants).
+// ErrInvalidEnvName is returned by AddGrant for an environment variable
+// name that isn't uppercase letters, digits and underscores.
 var ErrInvalidEnvName = errors.New("storage: invalid environment variable name")
 
-// ErrEnvNameTaken is returned by AddACL when a secret grant's effective
+// ErrEnvNameTaken is returned by AddGrant when the grant's effective
 // environment variable name is already used by another of the same
-// token's secret grants - `voidgrid-secrets run` couldn't expose both.
+// token's grants - `voidgrid-secrets run` couldn't expose both.
 var ErrEnvNameTaken = errors.New("storage: environment variable name already used by another grant on this token")
 
-// ErrSecretNotFound is returned by AddACL when granting a secret that
-// doesn't exist.
-var ErrSecretNotFound = errors.New("storage: secret not found")
-
-// TokenRepo provides access to machine tokens and their resource ACLs.
+// TokenRepo provides access to machine tokens and their per-secret grants.
 // It implements token.Authenticator.
 type TokenRepo struct {
 	db *DB
@@ -39,35 +34,24 @@ func NewTokenRepo(db *DB) *TokenRepo {
 	return &TokenRepo{db: db}
 }
 
+const tokenColumns = `id, description, created_at, expires_at, revoked_at, last_used_at`
+
 // Create generates a new machine token, stores only its hash, and returns
-// the plaintext token (shown to the caller exactly once) along with its
-// stored metadata.
-func (r *TokenRepo) Create(ctx context.Context, description string, createdBy int64, expiresAt *time.Time) (plaintext string, mt model.MachineToken, err error) {
+// the plaintext token (shown to the caller exactly once) with its stored
+// metadata.
+func (r *TokenRepo) Create(ctx context.Context, description string, expiresAt *time.Time) (plaintext string, mt model.MachineToken, err error) {
 	plaintext, err = token.Generate()
 	if err != nil {
 		return "", model.MachineToken{}, err
 	}
-	hash := crypto.HashToken(plaintext)
-
-	var expiresArg interface{}
-	if expiresAt != nil {
-		expiresArg = formatTimestamp(*expiresAt)
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query:     `INSERT INTO machine_tokens (token_hash, description, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+		Arguments: []interface{}{crypto.HashToken(plaintext), description, timeOrNil(expiresAt), nowTimestamp()},
+	}})
+	if err := writeErr("create machine token", results, err); err != nil {
+		return "", model.MachineToken{}, err
 	}
-
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
-		{
-			Query:     `INSERT INTO machine_tokens (token_hash, description, created_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`,
-			Arguments: []interface{}{hash, description, createdBy, expiresArg, nowTimestamp()},
-		},
-	})
-	if err != nil {
-		return "", model.MachineToken{}, fmt.Errorf("storage: insert machine token: %w", err)
-	}
-	if results[0].Err != nil {
-		return "", model.MachineToken{}, fmt.Errorf("storage: insert machine token: %w", results[0].Err)
-	}
-
-	mt, err = r.getByID(ctx, results[0].LastInsertID)
+	mt, err = r.Get(ctx, results[0].LastInsertID)
 	if err != nil {
 		return "", model.MachineToken{}, err
 	}
@@ -76,14 +60,11 @@ func (r *TokenRepo) Create(ctx context.Context, description string, createdBy in
 
 // Authenticate implements token.Authenticator: it hashes plaintext, looks
 // up the matching token, rejects it if revoked or expired, records
-// last_used_at, and returns the token's metadata and ACLs.
-func (r *TokenRepo) Authenticate(ctx context.Context, plaintext string) (model.MachineToken, []model.TokenACL, error) {
-	hash := crypto.HashToken(plaintext)
-
+// last_used_at, and returns the token's metadata and grants.
+func (r *TokenRepo) Authenticate(ctx context.Context, plaintext string) (model.MachineToken, []model.TokenGrant, error) {
 	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
-		Query: `SELECT id, description, created_by, created_at, expires_at, revoked_at, last_used_at
-			FROM machine_tokens WHERE token_hash = ?`,
-		Arguments: []interface{}{hash},
+		Query:     `SELECT ` + tokenColumns + ` FROM machine_tokens WHERE token_hash = ?`,
+		Arguments: []interface{}{crypto.HashToken(plaintext)},
 	})
 	if err != nil {
 		return model.MachineToken{}, nil, fmt.Errorf("storage: authenticate token: %w", err)
@@ -91,179 +72,156 @@ func (r *TokenRepo) Authenticate(ctx context.Context, plaintext string) (model.M
 	if !qr.Next() {
 		return model.MachineToken{}, nil, token.ErrInvalidToken
 	}
-
 	mt, err := scanMachineToken(qr)
 	if err != nil {
-		return model.MachineToken{}, nil, fmt.Errorf("storage: scan machine token: %w", err)
+		return model.MachineToken{}, nil, err
 	}
-
-	if mt.RevokedAt != nil {
-		return model.MachineToken{}, nil, token.ErrInvalidToken
-	}
-	if mt.ExpiresAt != nil && mt.ExpiresAt.Before(time.Now()) {
+	if mt.RevokedAt != nil || (mt.ExpiresAt != nil && mt.ExpiresAt.Before(time.Now())) {
 		return model.MachineToken{}, nil, token.ErrInvalidToken
 	}
 
-	acls, err := r.listACLs(ctx, mt.ID)
+	grants, err := r.ListGrants(ctx, mt.ID)
 	if err != nil {
 		return model.MachineToken{}, nil, err
 	}
 
 	now := time.Now()
-	if _, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
-		{
-			Query:     `UPDATE machine_tokens SET last_used_at = ? WHERE id = ?`,
-			Arguments: []interface{}{formatTimestamp(now), mt.ID},
-		},
-	}); err != nil {
-		return model.MachineToken{}, nil, fmt.Errorf("storage: record token use: %w", err)
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query: `UPDATE machine_tokens SET last_used_at = ? WHERE id = ?`, Arguments: []interface{}{formatTimestamp(now), mt.ID},
+	}})
+	if err := writeErr("record token use", results, err); err != nil {
+		return model.MachineToken{}, nil, err
 	}
 	mt.LastUsedAt = &now
-
-	return mt, acls, nil
+	return mt, grants, nil
 }
 
-// Revoke marks a machine token as revoked immediately.
+// Revoke marks a token revoked; it can never authenticate again.
 func (r *TokenRepo) Revoke(ctx context.Context, id int64) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
-		{
-			Query:     `UPDATE machine_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
-			Arguments: []interface{}{formatTimestamp(time.Now()), id},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("storage: revoke token %d: %w", id, err)
-	}
-	if results[0].Err != nil {
-		return fmt.Errorf("storage: revoke token %d: %w", id, results[0].Err)
-	}
-	return nil
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query:     `UPDATE machine_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
+		Arguments: []interface{}{nowTimestamp(), id},
+	}})
+	return writeErr("revoke token", results, err)
 }
 
-// AddACL grants token id permission on the given resource. For a secret
-// grant, envName is the environment variable name `voidgrid-secrets run`
-// exposes it under, or "" to derive one from the secret's name; the
-// effective name must not collide with another of this token's secret
-// grants. Group grants take no env name.
-func (r *TokenRepo) AddACL(ctx context.Context, tokenID int64, resourceType string, resourceID int64, permission, envName string) error {
-	var storedEnvName interface{}
-	if resourceType == "secret" {
-		effective, err := r.effectiveEnvName(ctx, resourceID, envName)
+// AddGrant gives token tokenID permission ("read" or "write") on a secret,
+// exposed to `run` and the agent under envName - or, if envName is empty,
+// a name derived from the secret's name. Grants whose effective names
+// collide on one token are refused. Both the token and the secret must
+// exist.
+func (r *TokenRepo) AddGrant(ctx context.Context, tokenID, secretID int64, permission, envName string) error {
+	if envName != "" && !envname.Valid(envName) {
+		return fmt.Errorf("%w: %q", ErrInvalidEnvName, envName)
+	}
+	effective := envName
+	if effective == "" {
+		name, err := r.secretName(ctx, secretID)
 		if err != nil {
 			return err
 		}
-		grants, err := r.EnvGrants(ctx, tokenID)
-		if err != nil {
-			return err
+		effective = envname.Derive(name)
+	}
+	existing, err := r.EnvGrants(ctx, tokenID)
+	if err != nil {
+		return err
+	}
+	for _, g := range existing {
+		if g.EnvName == effective && g.SecretID != secretID {
+			return fmt.Errorf("%w: %s", ErrEnvNameTaken, effective)
 		}
-		for _, g := range grants {
-			if g.EnvName == effective {
-				return fmt.Errorf("%w: %s", ErrEnvNameTaken, effective)
-			}
-		}
-		if envName != "" {
-			storedEnvName = envName
-		}
-	} else if envName != "" {
-		return fmt.Errorf("%w: env names only apply to secret grants", ErrInvalidEnvName)
 	}
 
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
-		{
-			Query: `INSERT INTO machine_token_acls (token_id, resource_type, resource_id, permission, env_name)
-				SELECT ?, ?, ?, ?, ?
-				WHERE EXISTS (SELECT 1 FROM machine_tokens WHERE id = ?)
-					AND ((? = 'secret' AND EXISTS (SELECT 1 FROM secrets WHERE id = ?))
-						OR (? = 'group' AND EXISTS (SELECT 1 FROM groups WHERE id = ?)))`,
-			Arguments: []interface{}{
-				tokenID, resourceType, resourceID, permission, storedEnvName,
-				tokenID,
-				resourceType, resourceID,
-				resourceType, resourceID,
-			},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("storage: add ACL for token %d: %w", tokenID, err)
+	var stored interface{}
+	if envName != "" {
+		stored = envName
 	}
-	if results[0].Err != nil {
-		return fmt.Errorf("storage: add ACL for token %d: %w", tokenID, results[0].Err)
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query: `INSERT INTO machine_token_grants (token_id, secret_id, permission, env_name)
+			SELECT ?, ?, ?, ?
+			WHERE EXISTS (SELECT 1 FROM machine_tokens WHERE id = ?) AND EXISTS (SELECT 1 FROM secrets WHERE id = ?)
+			ON CONFLICT (token_id, secret_id) DO UPDATE SET permission = excluded.permission, env_name = excluded.env_name`,
+		Arguments: []interface{}{tokenID, secretID, permission, stored, tokenID, secretID},
+	}})
+	if err := writeErr("add grant", results, err); err != nil {
+		return err
 	}
 	if results[0].RowsAffected == 0 {
-		return fmt.Errorf("%w: token %d or %s %d", ErrNotFound, tokenID, resourceType, resourceID)
+		return fmt.Errorf("%w: token %d or secret %d", ErrNotFound, tokenID, secretID)
 	}
 	return nil
 }
 
-// List returns every machine token (for the admin token-management
-// screen), newest first.
+// List returns every machine token, newest first.
 func (r *TokenRepo) List(ctx context.Context) ([]model.MachineToken, error) {
-	qr, err := r.db.conn.QueryContext(ctx, []string{
-		`SELECT id, description, created_by, created_at, expires_at, revoked_at, last_used_at
-			FROM machine_tokens ORDER BY id DESC`,
-	})
+	qr, err := r.db.conn.QueryOneContext(ctx, `SELECT `+tokenColumns+` FROM machine_tokens ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list tokens: %w", err)
 	}
-	if len(qr) == 0 {
-		return nil, fmt.Errorf("storage: list tokens: no result")
-	}
-
-	var tokens []model.MachineToken
-	for qr[0].Next() {
-		mt, err := scanMachineToken(qr[0])
+	tokens := []model.MachineToken{}
+	for qr.Next() {
+		mt, err := scanMachineToken(qr)
 		if err != nil {
-			return nil, fmt.Errorf("storage: scan token: %w", err)
+			return nil, err
 		}
 		tokens = append(tokens, mt)
 	}
 	return tokens, nil
 }
 
-// ListACLs returns every grant on token id.
-func (r *TokenRepo) ListACLs(ctx context.Context, tokenID int64) ([]model.TokenACL, error) {
-	return r.listACLs(ctx, tokenID)
+// Get returns one token's metadata.
+func (r *TokenRepo) Get(ctx context.Context, id int64) (model.MachineToken, error) {
+	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+		Query: `SELECT ` + tokenColumns + ` FROM machine_tokens WHERE id = ?`, Arguments: []interface{}{id},
+	})
+	if err != nil {
+		return model.MachineToken{}, fmt.Errorf("storage: get token %d: %w", id, err)
+	}
+	if !qr.Next() {
+		return model.MachineToken{}, fmt.Errorf("%w: token %d", ErrNotFound, id)
+	}
+	return scanMachineToken(qr)
 }
 
-func (r *TokenRepo) listACLs(ctx context.Context, tokenID int64) ([]model.TokenACL, error) {
+// ListGrants returns every grant on a token, with the secret's name.
+func (r *TokenRepo) ListGrants(ctx context.Context, tokenID int64) ([]model.TokenGrant, error) {
 	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
-		Query:     `SELECT token_id, resource_type, resource_id, permission, env_name FROM machine_token_acls WHERE token_id = ?`,
+		Query: `SELECT g.token_id, g.secret_id, s.name, g.permission, g.env_name
+			FROM machine_token_grants g JOIN secrets s ON s.id = g.secret_id
+			WHERE g.token_id = ? ORDER BY s.name`,
 		Arguments: []interface{}{tokenID},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("storage: list ACLs for token %d: %w", tokenID, err)
+		return nil, fmt.Errorf("storage: list grants for token %d: %w", tokenID, err)
 	}
-
-	var acls []model.TokenACL
+	grants := []model.TokenGrant{}
 	for qr.Next() {
 		var (
-			acl     model.TokenACL
+			g       model.TokenGrant
 			envName gorqlite.NullString
 		)
-		if err := qr.Scan(&acl.TokenID, &acl.ResourceType, &acl.ResourceID, &acl.Permission, &envName); err != nil {
-			return nil, fmt.Errorf("storage: scan ACL for token %d: %w", tokenID, err)
+		if err := qr.Scan(&g.TokenID, &g.SecretID, &g.SecretName, &g.Permission, &envName); err != nil {
+			return nil, fmt.Errorf("storage: scan grant: %w", err)
 		}
-		acl.EnvName = envName.String
-		acls = append(acls, acl)
+		g.EnvName = envName.String
+		grants = append(grants, g)
 	}
-	return acls, nil
+	return grants, nil
 }
 
-// EnvGrants returns every secret token id is granted (read or write),
-// each with its effective environment variable name: the grant's explicit
-// name, or one derived from the secret's name. Ordered by secret ID.
+// EnvGrants returns a token's grants with each one's effective environment
+// variable name (explicit, or derived from the secret's current name) and
+// when the secret's value last changed.
 func (r *TokenRepo) EnvGrants(ctx context.Context, tokenID int64) ([]model.EnvGrant, error) {
 	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
-		Query: `SELECT s.id, s.name, a.env_name, a.permission, s.updated_at
-			FROM machine_token_acls a JOIN secrets s ON s.id = a.resource_id
-			WHERE a.token_id = ? AND a.resource_type = 'secret'
-			ORDER BY s.id`,
+		Query: `SELECT s.id, s.name, g.env_name, g.permission, s.updated_at
+			FROM machine_token_grants g JOIN secrets s ON s.id = g.secret_id
+			WHERE g.token_id = ? ORDER BY s.id`,
 		Arguments: []interface{}{tokenID},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("storage: list env grants for token %d: %w", tokenID, err)
 	}
-
 	var grants []model.EnvGrant
 	for qr.Next() {
 		var (
@@ -272,13 +230,11 @@ func (r *TokenRepo) EnvGrants(ctx context.Context, tokenID int64) ([]model.EnvGr
 			updatedRaw string
 		)
 		if err := qr.Scan(&g.SecretID, &g.SecretName, &envName, &g.Permission, &updatedRaw); err != nil {
-			return nil, fmt.Errorf("storage: scan env grant for token %d: %w", tokenID, err)
+			return nil, fmt.Errorf("storage: scan env grant: %w", err)
 		}
-		updatedAt, err := parseTimestamp(updatedRaw)
-		if err != nil {
+		if g.SecretUpdatedAt, err = parseTimestamp(updatedRaw); err != nil {
 			return nil, fmt.Errorf("storage: parse updated_at of secret %d: %w", g.SecretID, err)
 		}
-		g.SecretUpdatedAt = updatedAt
 		g.EnvName = envName.String
 		if g.EnvName == "" {
 			g.EnvName = envname.Derive(g.SecretName)
@@ -288,29 +244,9 @@ func (r *TokenRepo) EnvGrants(ctx context.Context, tokenID int64) ([]model.EnvGr
 	return grants, nil
 }
 
-// effectiveEnvName validates an explicit env name, or derives one from the
-// secret's name when envName is empty.
-func (r *TokenRepo) effectiveEnvName(ctx context.Context, secretID int64, envName string) (string, error) {
-	if envName != "" {
-		if !envname.Valid(envName) {
-			return "", fmt.Errorf("%w: %q", ErrInvalidEnvName, envName)
-		}
-		if _, err := r.secretName(ctx, secretID); err != nil {
-			return "", err
-		}
-		return envName, nil
-	}
-	name, err := r.secretName(ctx, secretID)
-	if err != nil {
-		return "", err
-	}
-	return envname.Derive(name), nil
-}
-
 func (r *TokenRepo) secretName(ctx context.Context, secretID int64) (string, error) {
 	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
-		Query:     `SELECT name FROM secrets WHERE id = ?`,
-		Arguments: []interface{}{secretID},
+		Query: `SELECT name FROM secrets WHERE id = ?`, Arguments: []interface{}{secretID},
 	})
 	if err != nil {
 		return "", fmt.Errorf("storage: look up secret %d: %w", secretID, err)
@@ -325,50 +261,27 @@ func (r *TokenRepo) secretName(ctx context.Context, secretID int64) (string, err
 	return name, nil
 }
 
-func (r *TokenRepo) getByID(ctx context.Context, id int64) (model.MachineToken, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
-		Query: `SELECT id, description, created_by, created_at, expires_at, revoked_at, last_used_at
-			FROM machine_tokens WHERE id = ?`,
-		Arguments: []interface{}{id},
-	})
-	if err != nil {
-		return model.MachineToken{}, fmt.Errorf("storage: get token %d: %w", id, err)
-	}
-	if !qr.Next() {
-		return model.MachineToken{}, fmt.Errorf("storage: token %d not found", id)
-	}
-	return scanMachineToken(qr)
-}
-
 func scanMachineToken(qr gorqlite.QueryResult) (model.MachineToken, error) {
 	var (
-		mt           model.MachineToken
-		createdAtRaw string
-		expiresAt    gorqlite.NullString
-		revokedAt    gorqlite.NullString
-		lastUsedAt   gorqlite.NullString
+		mt                               model.MachineToken
+		createdAtRaw                     string
+		expiresAt, revokedAt, lastUsedAt gorqlite.NullString
 	)
-	if err := qr.Scan(&mt.ID, &mt.Description, &mt.CreatedBy, &createdAtRaw, &expiresAt, &revokedAt, &lastUsedAt); err != nil {
-		return model.MachineToken{}, err
+	if err := qr.Scan(&mt.ID, &mt.Description, &createdAtRaw, &expiresAt, &revokedAt, &lastUsedAt); err != nil {
+		return model.MachineToken{}, fmt.Errorf("storage: scan token: %w", err)
 	}
-
 	var err error
-	mt.CreatedAt, err = parseTimestamp(createdAtRaw)
-	if err != nil {
-		return model.MachineToken{}, fmt.Errorf("parse created_at: %w", err)
+	if mt.CreatedAt, err = parseTimestamp(createdAtRaw); err != nil {
+		return model.MachineToken{}, fmt.Errorf("storage: parse token created_at: %w", err)
 	}
-	mt.ExpiresAt, err = parseNullableTimestamp(expiresAt.String, expiresAt.Valid)
-	if err != nil {
-		return model.MachineToken{}, fmt.Errorf("parse expires_at: %w", err)
+	if mt.ExpiresAt, err = parseNullableTimestamp(expiresAt.String, expiresAt.Valid); err != nil {
+		return model.MachineToken{}, fmt.Errorf("storage: parse token expires_at: %w", err)
 	}
-	mt.RevokedAt, err = parseNullableTimestamp(revokedAt.String, revokedAt.Valid)
-	if err != nil {
-		return model.MachineToken{}, fmt.Errorf("parse revoked_at: %w", err)
+	if mt.RevokedAt, err = parseNullableTimestamp(revokedAt.String, revokedAt.Valid); err != nil {
+		return model.MachineToken{}, fmt.Errorf("storage: parse token revoked_at: %w", err)
 	}
-	mt.LastUsedAt, err = parseNullableTimestamp(lastUsedAt.String, lastUsedAt.Valid)
-	if err != nil {
-		return model.MachineToken{}, fmt.Errorf("parse last_used_at: %w", err)
+	if mt.LastUsedAt, err = parseNullableTimestamp(lastUsedAt.String, lastUsedAt.Valid); err != nil {
+		return model.MachineToken{}, fmt.Errorf("storage: parse token last_used_at: %w", err)
 	}
-
 	return mt, nil
 }

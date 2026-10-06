@@ -5,6 +5,7 @@ package totp
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/pquerna/otp/totp"
 )
@@ -31,4 +32,13 @@ func Generate(accountName string) (secret, provisioningURI string, err error) {
 // Validate reports whether code is a currently valid TOTP code for secret.
 func Validate(code, secret string) bool {
 	return totp.Validate(code, secret)
+}
+
+// URI rebuilds the otpauth:// provisioning URI for an existing secret, in
+// the same form Generate returns (default 6 digits, 30 seconds, SHA-1).
+func URI(accountName, secret string) string {
+	v := url.Values{}
+	v.Set("secret", secret)
+	v.Set("issuer", Issuer)
+	return "otpauth://totp/" + url.PathEscape(Issuer+":"+accountName) + "?" + v.Encode()
 }

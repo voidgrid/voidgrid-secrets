@@ -75,7 +75,7 @@ type GetEnvOutput struct {
 
 // Get returns every secret the authenticated machine token may read.
 func (h *EnvHandler) Get(ctx context.Context, in *GetEnvInput) (*GetEnvOutput, error) {
-	mt, acls, ok := token.FromContext(ctx)
+	mt, tokenGrants, ok := token.FromContext(ctx)
 	if !ok {
 		return nil, huma.Error401Unauthorized("machine token required")
 	}
@@ -102,7 +102,7 @@ func (h *EnvHandler) Get(ctx context.Context, in *GetEnvInput) (*GetEnvOutput, e
 
 	readable := grants[:0]
 	for _, g := range grants {
-		if token.CanAccess(acls, "secret", g.SecretID, "read") {
+		if token.CanAccess(tokenGrants, g.SecretID, "read") {
 			readable = append(readable, g)
 		}
 	}

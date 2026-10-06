@@ -25,9 +25,7 @@ type Deps struct {
 	AuthHandler    *AuthHandler
 	SecretsHandler *SecretsHandler
 	EnvHandler     *EnvHandler
-	SharesHandler  *SharesHandler
-	UsersHandler   *UsersHandler
-	GroupsHandler  *GroupsHandler
+	RecoverHandler *RecoverHandler
 	TokensHandler  *TokensHandler
 	AuditHandler   *AuditHandler
 	// Audit records rejected machine tokens.
@@ -43,19 +41,18 @@ type Deps struct {
 // are reachable. Once it completes, those setup-* operations become
 // unreachable in turn, and everything else opens up.
 //
-// Within /api/v1:
-//   - setup/* and auth/* (login, logout) require no prior authentication.
-//   - secrets/* accepts EITHER a machine-token bearer header OR a human
-//     session cookie, authorizing via the token's ACLs or the session
-//     user's ownership/group-membership/sharing access respectively.
-//   - env is machine-token-only: every secret the token may read, with
-//     the environment variable name each is exposed under, for
-//     `voidgrid-secrets run`.
-//   - secrets/{id}/shares/* is session-only: sharing is a human decision,
-//     not something a machine token should ever do.
-//   - admin/* (users, groups, machine tokens) is session-only AND requires
-//     the session user to be an admin. Machine tokens can never reach
-//     these routes under any circumstance, by construction.
+// Within /api/v1 (voidgrid-secrets is single-user: the signed-in account
+// can do everything; machine tokens only what they're granted):
+//   - setup/*, auth/* (login, logout) and recover/* need no prior
+//     authentication.
+//   - secrets/* accepts a session cookie or a machine-token bearer header;
+//     a token reaches only the secrets it's granted, and only the
+//     read/update operations.
+//   - env is machine-token-only: every secret the token may read, with the
+//     environment variable name each is exposed under, for `run` and the
+//     agent.
+//   - tokens/* and audit are session-only: a machine token can never
+//     manage tokens or read the audit log.
 func NewRouter(deps Deps) http.Handler {
 	router := chi.NewMux()
 	router.Use(noStore)
@@ -75,16 +72,12 @@ func NewRouter(deps Deps) http.Handler {
 	v1Env.UseMiddleware(tokenAuthMiddleware(humaAPI, deps.TokenAuth, deps.Audit))
 	RegisterEnv(v1Env, deps.EnvHandler)
 
-	v1Shares := huma.NewGroup(v1)
-	v1Shares.UseMiddleware(sessionAuthMiddleware(humaAPI, deps.SessionAuth))
-	RegisterShares(v1Shares, deps.SharesHandler)
+	RegisterRecover(v1, deps.RecoverHandler)
 
-	admin := huma.NewGroup(v1)
-	admin.UseMiddleware(sessionAuthMiddleware(humaAPI, deps.SessionAuth), adminOnlyMiddleware(humaAPI))
-	RegisterUsers(admin, deps.UsersHandler)
-	RegisterGroups(admin, deps.GroupsHandler)
-	RegisterTokens(admin, deps.TokensHandler)
-	RegisterAudit(admin, deps.AuditHandler)
+	account := huma.NewGroup(v1)
+	account.UseMiddleware(sessionAuthMiddleware(humaAPI, deps.SessionAuth))
+	RegisterTokens(account, deps.TokensHandler)
+	RegisterAudit(account, deps.AuditHandler)
 
 	// Same protection as the web UI (see web.crossOriginProtection): the
 	// session-cookie routes would otherwise accept bodiless POSTs (token

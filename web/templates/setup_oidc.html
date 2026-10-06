@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>first-run setup: OIDC</h1>
-<p class="muted">No admin account exists yet. Configure your identity provider to continue - the first person to log in via OIDC becomes the admin.</p>
+<p class="muted">Configure your identity provider. Next you'll sign in through it once, and that identity becomes this instance's one account.</p>
 <form class="stack" method="post" action="/setup/oidc">
     <label>setup token <span class="muted">(printed in the server log at startup)</span>
         <input type="password" name="setup_token" autocomplete="off" required autofocus>

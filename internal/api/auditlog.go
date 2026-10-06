@@ -18,29 +18,27 @@ func NewAuditHandler(repo *storage.AuditRepo) *AuditHandler {
 	return &AuditHandler{repo: repo}
 }
 
-// RegisterAudit registers the audit log operation on api (an admin group).
+// RegisterAudit registers the audit log operation on api (a session-only
+// group).
 func RegisterAudit(api huma.API, h *AuditHandler) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-audit-log",
 		Method:      "GET",
-		Path:        "/admin/audit",
+		Path:        "/audit",
 		Summary:     "List audit log entries, newest first",
-		Description: "Every logged event: sign-ins (including failures and lockouts), setup, secret reveals, " +
-			"writes, sharing, token and grant changes, and user and group administration. Filter with the " +
-			"query parameters; page with before (the next_before of the previous page).",
-		Tags: []string{"admin"},
+		Description: "Everything that reveals a value or changes something, plus failed and refused attempts. " +
+			"Entries older than 14 days are pruned. Filter by action or token; page with before (the " +
+			"next_before of the previous page).",
+		Tags: []string{"audit"},
 	}, h.List)
 }
 
 // ListAuditInput filters and pages the audit log.
 type ListAuditInput struct {
-	Action       string `query:"action" doc:"Only this action, e.g. reveal or login_failed"`
-	ActorType    string `query:"actor_type" enum:"user,token,anonymous,system," doc:"Only this kind of actor"`
-	ActorID      int64  `query:"actor_id" doc:"Only this user or token id (with actor_type)"`
-	ResourceType string `query:"resource_type" doc:"Only this kind of resource: secret, user, group, token, setup"`
-	ResourceID   int64  `query:"resource_id" doc:"Only this resource id (with resource_type)"`
-	Before       int64  `query:"before" doc:"Only entries older than this id"`
-	Limit        int    `query:"limit" minimum:"0" maximum:"500" doc:"Entries per page (default 100)"`
+	Action  string `query:"action" doc:"Only this action, e.g. reveal or login_failed"`
+	TokenID int64  `query:"token_id" doc:"Only entries where this machine token acted or was acted on"`
+	Before  int64  `query:"before" doc:"Only entries older than this id"`
+	Limit   int    `query:"limit" minimum:"0" maximum:"500" doc:"Entries per page (default 100)"`
 }
 
 // ListAuditOutput is one page of entries.
@@ -59,11 +57,7 @@ func (h *AuditHandler) List(ctx context.Context, in *ListAuditInput) (*ListAudit
 	if limit == 0 {
 		limit = 100
 	}
-	entries, err := h.repo.List(ctx, storage.AuditFilter{
-		Action: in.Action, ActorType: in.ActorType, ActorID: in.ActorID,
-		ResourceType: in.ResourceType, ResourceID: in.ResourceID,
-		BeforeID: in.Before, Limit: limit,
-	})
+	entries, err := h.repo.List(ctx, storage.AuditFilter{Action: in.Action, TokenID: in.TokenID, BeforeID: in.Before, Limit: limit})
 	if err != nil {
 		return nil, huma.Error500InternalServerError("internal error")
 	}

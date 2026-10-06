@@ -46,10 +46,10 @@ unprivileged as UID/GID 1000.
   other containers.
 - [docs/authentication.md](docs/authentication.md) - the setup wizard,
   password + TOTP, OIDC (including the callback URL to register with your
-  provider), recovery codes, sessions, sign-in lockout, and what admins
-  can see.
+  provider), account recovery and the break-glass `recover` command,
+  sessions, and sign-in lockout.
 - [docs/audit-log.md](docs/audit-log.md) - what's recorded, and the
-  viewer at `/admin/audit`.
+  viewer at `/audit`.
 - [docs/runtime-injection.md](docs/runtime-injection.md) -
   `voidgrid-secrets run`: give another container its secrets at startup,
   as environment variables or tmpfs files, without writing them to disk;
@@ -63,11 +63,12 @@ unprivileged as UID/GID 1000.
 
 The API is spec-first (via `huma`): a running instance serves interactive
 docs at `/docs` and the OpenAPI 3.1 spec at `/openapi.json`. Automated
-consumers authenticate with scoped, admin-issued machine tokens (bearer
-tokens); the web UI uses password + TOTP or OIDC sessions.
-`/api/v1/secrets/*` accepts either; `/api/v1/env` (all of a token's
-secrets at once, used by `voidgrid-secrets run`) is machine-token only;
-`/api/v1/admin/*` is session-and-admin only.
+consumers authenticate with scoped machine tokens (bearer tokens); the
+web UI uses a password + TOTP or OIDC session for the one account.
+`/api/v1/secrets/*` accepts either (a token only reaches what it's
+granted); `/api/v1/env` (all of a token's secrets at once, used by
+`voidgrid-secrets run` and the agent) is machine-token only;
+`/api/v1/tokens` and `/api/v1/audit` are session only.
 
 ## Development
 
