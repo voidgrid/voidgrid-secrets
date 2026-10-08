@@ -9,7 +9,9 @@ voidegrid-secrets does have a real test suite, the encyrption should be solid, a
 - Docker - the only thing needed to run, build, or develop this project.
 - If you decide to ignore my warning and expose this to the internet then this is the bare minimum
   - A reverse proxy that terminates HTTPS in front of it (Caddy, Traefik,
-  nginx): the app serves plain HTTP and its session cookies require HTTPS.
+  nginx): the app serves plain HTTP, and its session cookies require HTTPS
+  except from networks you list in `VOIDGRID_HTTP_ALLOWED_NETS` (see
+  [docs/deployment.md](docs/deployment.md#3-https-or-a-trusted-network)).
   - Again, do not fucking do this
 - Optionally, an OIDC identity provider (e.g. Pocket ID) if you'd rather
   not use password + TOTP sign-in.
@@ -46,8 +48,10 @@ unprivileged as UID/GID 1000.
 ## Documentation
 
 - [docs/deployment.md](docs/deployment.md) - running the image, the root
-  key, volumes, HTTPS, restarts, environment variables, using secrets from
-  other containers.
+  key, volumes, HTTPS or trusted networks, backup and restore, upgrading,
+  restarts, environment variables, using secrets from other containers.
+- [docs/first-steps.md](docs/first-steps.md) - add a secret, create a token,
+  grant it, and use it from a container.
 - [docs/authentication.md](docs/authentication.md) - the setup wizard,
   password + TOTP, OIDC (including the callback URL to register with your
   provider), account recovery and the break-glass `recover` command,

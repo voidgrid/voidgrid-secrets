@@ -36,7 +36,7 @@ type Var struct {
 
 // FetchOptions configures Fetch.
 type FetchOptions struct {
-	// URL is the server's base URL, e.g. http://voidgrid-secrets:8443.
+	// URL is the server's base URL, e.g. http://voidgrid-secrets:8780.
 	URL   string
 	Token string
 	// Timeout bounds how long Fetch keeps retrying while the server is

@@ -80,18 +80,21 @@ Recovery codes:
 Run this inside the server's container:
 
 ```
-docker exec voidgrid-secrets voidgrid-secrets recover
+docker compose exec voidgrid-secrets voidgrid-secrets recover
 ```
 
 It prints a one-time code (valid 15 minutes) that works at `/recover`
-exactly like a recovery code. Only someone who can run commands in the
+exactly like a recovery code. (With plain `docker run`, use
+`docker exec <container> voidgrid-secrets recover`.) Only someone who can run commands in the
 container can do this - the same person who can read the setup token, the
 root key and the database anyway. It's recorded in the audit log.
 
 ## Sessions
 
 Web sessions last 24 hours and use a `Secure`, `HttpOnly`,
-`SameSite=Strict` cookie, which is why the UI needs HTTPS. Signing out
+`SameSite=Strict` cookie, which is why the UI needs HTTPS - or a network
+you list in `VOIDGRID_HTTP_ALLOWED_NETS`
+([deployment.md](deployment.md#3-https-or-a-trusted-network)). Signing out
 ends the session on the server; a recovery ends all of them.
 
 Form submissions and API calls made with a session cookie are refused

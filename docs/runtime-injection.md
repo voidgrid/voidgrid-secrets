@@ -78,7 +78,7 @@ be restated. Give it the token as a Docker secret (mounted at
       voidgrid-secrets-bin:
         condition: service_completed_successfully
     environment:
-      VOIDGRID_URL: http://voidgrid-secrets:8443
+      VOIDGRID_URL: http://voidgrid-secrets:8780
     secrets:
       - voidgrid-token
     volumes:
@@ -108,7 +108,7 @@ in a `*_FILE` variable. With `--files DIR`, each secret is written to
       voidgrid-secrets-bin:
         condition: service_completed_successfully
     environment:
-      VOIDGRID_URL: http://voidgrid-secrets:8443
+      VOIDGRID_URL: http://voidgrid-secrets:8780
     secrets:
       - voidgrid-token
     volumes:
@@ -165,7 +165,7 @@ themselves.
   the container, can read a running process's environment through
   `/proc`. That's true of every tool that works this way.
 - **Plain HTTP on the Docker network.** Inside one compose project,
-  `http://voidgrid-secrets:8443` never leaves the host. Across hosts, use
+  `http://voidgrid-secrets:8780` never leaves the host. Across hosts, use
   the HTTPS address behind your reverse proxy.
 
 ## Agent mode: no wrapper
@@ -209,7 +209,7 @@ services:
     image: ghcr.io/voidgrid/voidgrid-secrets:beta
     entrypoint: ["/usr/local/bin/voidgrid-secrets", "agent"]
     command:
-      - --url=http://voidgrid-secrets:8443
+      - --url=http://voidgrid-secrets:8780
       - --out=/out
       - --target=postgres=/run/secrets/postgres-token,gid=999
     group_add: ["999"]

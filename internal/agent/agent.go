@@ -85,7 +85,7 @@ func ParseTarget(s string) (Target, error) {
 
 // Options configures Run.
 type Options struct {
-	// URL is the server's base URL, e.g. http://voidgrid-secrets:8443.
+	// URL is the server's base URL, e.g. http://voidgrid-secrets:8780.
 	URL     string
 	OutDir  string
 	Targets []Target

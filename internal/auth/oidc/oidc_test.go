@@ -20,7 +20,7 @@ func TestNewFailsFastOnUnreachableIssuer(t *testing.T) {
 		Issuer:       "http://127.0.0.1:1/does-not-exist",
 		ClientID:     "client-id",
 		ClientSecret: "client-secret",
-		RedirectURI:  "http://127.0.0.1:8443/auth/oidc/callback",
+		RedirectURI:  "http://127.0.0.1:8780/auth/oidc/callback",
 	})
 	if err == nil {
 		t.Fatal("expected New to fail for an unreachable issuer")

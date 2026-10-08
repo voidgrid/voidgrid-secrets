@@ -29,6 +29,6 @@ until curl -sf -o /dev/null http://127.0.0.1:4001/readyz 2>/dev/null; do
 done
 
 VOIDGRID_RQLITE_ADDR=http://127.0.0.1:4001 \
-VOIDGRID_LISTEN_ADDR=127.0.0.1:8443 \
+VOIDGRID_LISTEN_ADDR=127.0.0.1:8780 \
 VOIDGRID_ROOT_KEY_PATH="$DEV_DIR/root.key" \
     "$ROOT_DIR/bin/voidgrid-secrets"

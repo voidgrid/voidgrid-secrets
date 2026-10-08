@@ -21,8 +21,16 @@ services:
     # Runs unprivileged; the image itself also defaults to this user.
     user: "1000:1000"
     restart: unless-stopped
+    # Published on all interfaces so other machines on your network can
+    # reach it. If only a reverse proxy on this same host talks to it,
+    # use the loopback-only form instead.
     ports:
-      - "8443:8443"
+      - "8780:8780"
+      # - "127.0.0.1:8780:8780"
+    environment:
+      # Networks allowed to sign in over plain HTTP (e.g. your LAN and
+      # Tailscale), set in a .env file next to this one. Empty = HTTPS only.
+      VOIDGRID_HTTP_ALLOWED_NETS: ${VOIDGRID_HTTP_ALLOWED_NETS:-}
     volumes:
       - voidgrid-data:/data
       - voidgrid-root-key:/run/secrets
@@ -49,7 +57,7 @@ services:
   #     voidgrid-secrets-bin:
   #       condition: service_completed_successfully
   #   environment:
-  #     VOIDGRID_URL: http://voidgrid-secrets:8443
+  #     VOIDGRID_URL: http://voidgrid-secrets:8780
   #   secrets:
   #     - voidgrid-token
   #   volumes:
@@ -73,7 +81,7 @@ services:
   #   image: ghcr.io/voidgrid/voidgrid-secrets:beta
   #   entrypoint: ["/usr/local/bin/voidgrid-secrets", "agent"]
   #   command:
-  #     - --url=http://voidgrid-secrets:8443
+  #     - --url=http://voidgrid-secrets:8780
   #     - --out=/out
   #     - --target=postgres=/run/secrets/postgres-token,gid=999
   #   group_add: ["999"]

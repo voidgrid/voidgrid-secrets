@@ -77,11 +77,11 @@ RUN addgroup -g 1000 voidgrid && \
 USER 1000:1000
 
 ENV VOIDGRID_RQLITE_ADDR=http://127.0.0.1:4001 \
-    VOIDGRID_LISTEN_ADDR=0.0.0.0:8443 \
+    VOIDGRID_LISTEN_ADDR=0.0.0.0:8780 \
     VOIDGRID_ROOT_KEY_PATH=/run/secrets/voidgrid-root-key \
     RQLITE_DATA_DIR=/data/rqlite
 
 VOLUME ["/data"]
-EXPOSE 8443
+EXPOSE 8780
 
 ENTRYPOINT ["/init"]

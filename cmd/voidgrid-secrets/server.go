@@ -18,6 +18,7 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/totp"
 	"github.com/voidgrid/voidgrid-secrets/internal/config"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
+	"github.com/voidgrid/voidgrid-secrets/internal/httpsec"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/recovery"
 	"github.com/voidgrid/voidgrid-secrets/internal/setup"
@@ -130,7 +131,7 @@ func runServer(cfg config.Config) error {
 		Addr: cfg.ListenAddr,
 		// audit.Middleware attaches the client address to every audit
 		// entry recorded while handling a request.
-		Handler: audit.Middleware(root),
+		Handler: audit.Middleware(httpsec.Middleware(cfg.HTTPAllowedNets)(root)),
 		// Bound how long a client can hold a connection without finishing
 		// a request (slowloris). Every request here is small and quick.
 		ReadHeaderTimeout: 10 * time.Second,
