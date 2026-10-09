@@ -2,6 +2,7 @@ package runenv_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -171,5 +172,27 @@ func TestInvalidNamesFromServerAreRejected(t *testing.T) {
 	}
 	if _, err := runenv.FileVars(t.TempDir(), bad, func(string) (bool, error) { return true, nil }); err == nil {
 		t.Error("FileVars accepted a path-traversal name")
+	}
+}
+
+func TestFetchFailsWhenTokenHasNoGrants(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"secrets":[]}`)
+	}))
+	defer srv.Close()
+
+	_, err := runenv.Fetch(context.Background(), runenv.FetchOptions{URL: srv.URL, Token: testToken, Timeout: time.Second})
+	if !errors.Is(err, runenv.ErrNoSecrets) {
+		t.Fatalf("Fetch = %v, want ErrNoSecrets", err)
+	}
+	if !strings.Contains(err.Error(), "grant it") {
+		t.Fatalf("message doesn't say what to do: %v", err)
+	}
+}
+
+func TestSummaryListsNamesNotValues(t *testing.T) {
+	got := runenv.Summary([]runenv.Var{{Name: "A_KEY", Value: "hunter2"}, {Name: "B_KEY", Value: "s3cret"}})
+	if got != "2 variable(s): A_KEY, B_KEY" {
+		t.Fatalf("Summary = %q", got)
 	}
 }

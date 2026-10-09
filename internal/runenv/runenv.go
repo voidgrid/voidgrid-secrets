@@ -48,7 +48,13 @@ type FetchOptions struct {
 	Log io.Writer
 }
 
-// Fetch returns every secret the token may read. It retries while the
+// ErrNoSecrets is returned by Fetch when the token may read nothing: it has
+// no grants. Starting the command anyway would leave it silently without
+// its secrets.
+var ErrNoSecrets = errors.New("this token has no readable secrets - open the token's page in the web UI (tokens, then the token) and grant it the secrets it needs")
+
+// Fetch returns every secret the token may read, or ErrNoSecrets if there
+// are none. It retries while the
 // server is unreachable or answering 5xx (e.g. still starting, or setup
 // not yet complete) until Timeout, and fails immediately on any 4xx
 // (bad or revoked token, misconfigured grants).
@@ -70,6 +76,9 @@ func Fetch(ctx context.Context, o FetchOptions) ([]Secret, error) {
 	for attempt := 1; ; attempt++ {
 		res, err := FetchOnce(ctx, client, o.URL, o.Token, "")
 		if err == nil {
+			if len(res.Secrets) == 0 {
+				return nil, ErrNoSecrets
+			}
 			return res.Secrets, nil
 		}
 		if !Retryable(err) || time.Now().Add(delay).After(deadline) {
@@ -180,6 +189,16 @@ func EnvVars(secrets []Secret) ([]Var, error) {
 		vars = append(vars, Var{Name: s.EnvName, Value: s.Value})
 	}
 	return vars, nil
+}
+
+// Summary describes vars for a log line: how many, and their names (never
+// values).
+func Summary(vars []Var) string {
+	names := make([]string, len(vars))
+	for i, v := range vars {
+		names[i] = v.Name
+	}
+	return fmt.Sprintf("%d variable(s): %s", len(vars), strings.Join(names, ", "))
 }
 
 // CheckFilesDir returns an error unless dir is an in-memory filesystem

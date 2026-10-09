@@ -20,7 +20,8 @@ service its own token.
 
 ## 3. Grant it the secret
 
-Open the token and, under **grant a secret**, pick the secret, leave
+Open the token (click its id or description in the list; right after
+creating it there is a link) and, under **grant a secret**, pick the secret, leave
 permission on **read**, and optionally set the environment variable name
 (`MYAPP_DB_PASSWORD`). If you leave the name blank it is derived from the
 secret's name (`db-password` becomes `DB_PASSWORD`). The token's page lists

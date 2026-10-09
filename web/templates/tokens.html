@@ -5,7 +5,7 @@
     {{range .Tokens}}
     <tr>
         <td><a href="/tokens/{{.ID}}">{{.ID}}</a></td>
-        <td>{{.Description}}</td>
+        <td><a href="/tokens/{{.ID}}">{{.Description}}</a></td>
         <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
         <td>{{if .ExpiresAt}}{{.ExpiresAt.Format "2006-01-02 15:04"}}{{end}}</td>
         <td>{{if .RevokedAt}}yes{{end}}</td>
@@ -30,5 +30,6 @@
 </form>
 {{if .NewToken}}
 <p class="flash-info">new token (shown once): <code>{{.NewToken}}</code></p>
+<p class="flash-info">next: <a href="/tokens/{{.NewTokenID}}">grant this token the secrets it may read</a>. Until you do, it can read nothing.</p>
 {{end}}
 {{end}}

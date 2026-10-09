@@ -30,21 +30,24 @@ type tokensPage struct {
 	Tokens []model.MachineToken
 	// NewToken is a just-created token's value, shown once.
 	NewToken string
+	// NewTokenID links the just-created token to its page, where the
+	// secrets it may read are granted.
+	NewTokenID int64
 }
 
 // List shows every token.
 func (h *TokensHandler) List(w http.ResponseWriter, r *http.Request) {
 	user, _ := session.FromContext(r.Context())
-	h.renderList(w, r, user, "")
+	h.renderList(w, r, user, "", 0)
 }
 
-func (h *TokensHandler) renderList(w http.ResponseWriter, r *http.Request, user model.User, newToken string) {
+func (h *TokensHandler) renderList(w http.ResponseWriter, r *http.Request, user model.User, newToken string, newTokenID int64) {
 	tokens, err := h.tokens.List(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	render(w, http.StatusOK, "tokens", tokensPage{basePage: basePage{User: &user}, Tokens: tokens, NewToken: newToken})
+	render(w, http.StatusOK, "tokens", tokensPage{basePage: basePage{User: &user}, Tokens: tokens, NewToken: newToken, NewTokenID: newTokenID})
 }
 
 // SubmitCreate creates a token and shows its value once.
@@ -63,7 +66,7 @@ func (h *TokensHandler) SubmitCreate(w http.ResponseWriter, r *http.Request) {
 		Actor: audit.User(user.ID), Action: audit.TokenCreate, ResourceType: "token", ResourceID: mt.ID,
 		Details: map[string]string{"description": mt.Description},
 	})
-	h.renderList(w, r, user, plaintext)
+	h.renderList(w, r, user, plaintext, mt.ID)
 }
 
 // grantRow is one grant with its effective environment variable name.

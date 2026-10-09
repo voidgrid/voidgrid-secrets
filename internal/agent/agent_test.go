@@ -421,3 +421,23 @@ func TestRunFailsAtStartupWithoutReadyFile(t *testing.T) {
 		}
 	})
 }
+
+func TestSyncSaysWhenTheTokenHasNoGrants(t *testing.T) {
+	h := newHarness(t)
+	tg := h.target()
+	h.srv.set(`"v0"`)
+	if err := syncTarget(context.Background(), h.opts, tg); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.log.String(), "no readable secrets") {
+		t.Fatalf("zero grants not reported: %s", h.log.String())
+	}
+
+	h.srv.set(`"v1"`, sec("A", "1"), sec("B", "2"))
+	if err := syncTarget(context.Background(), h.opts, tg); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.log.String(), "2 secret(s) granted") {
+		t.Fatalf("grant count not reported: %s", h.log.String())
+	}
+}

@@ -141,3 +141,23 @@ func TestWebRemoveGrant(t *testing.T) {
 		t.Fatalf("remove again: %d, want 404", rec.Code)
 	}
 }
+
+func TestWebNewTokenPointsAtItsGrantPage(t *testing.T) {
+	e := newEnv(t)
+	completeSetupDirect(t, e)
+	cookie := ownerSession(t, e)
+
+	rec := doForm(t, e.handler, "/tokens", url.Values{"description": {"my-service"}}, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: %d", rec.Code)
+	}
+	toks, err := e.tokens.List(context.Background())
+	if err != nil || len(toks) != 1 {
+		t.Fatalf("tokens = %+v, %v", toks, err)
+	}
+	link := `href="/tokens/` + strconv.FormatInt(toks[0].ID, 10) + `"`
+	body := rec.Body.String()
+	if strings.Count(body, link) < 2 || !strings.Contains(body, "grant this token the secrets") {
+		t.Fatalf("create page lacks the next-step link and description link (%s): %s", link, body)
+	}
+}

@@ -24,7 +24,10 @@ values.
 ## 1. Create a token and grant it secrets
 
 In the web UI, go to tokens, create a token for the service (it's
-shown once), and grant it **read** on each secret that service needs. Each
+shown once), then open it (the link under the new token, or click its id
+or description in the list) and grant it **read** on each secret that
+service needs. A token starts with no grants, and a token with none
+reads nothing. Each
 grant has an environment variable name: set one explicitly (e.g.
 `POSTGRES_PASSWORD`) or leave it blank to derive it from the secret's name
 (`db-password` becomes `DB_PASSWORD`). A token can't have two secrets
@@ -130,7 +133,11 @@ ownership, e.g. `/run/voidgrid:uid=1000,gid=1000,mode=0700`.
   default) while the server is unreachable or still starting, so it copes
   with compose start order. A rejected or revoked token fails immediately.
 - **Fails closed:** if it can't get the secrets, it exits non-zero and the
-  real command never starts. Restart policies retry it.
+  real command never starts. Restart policies retry it. That includes a
+  token with no grants: it fails with a message pointing at the token's
+  page, instead of starting the command without its secrets.
+- **Says what it did:** before starting the command it prints the names
+  (never the values) of the variables it injected to stderr.
 - **Read once:** secrets are read at start. Restart the container to pick
   up a changed value.
 - **Clean environment:** `VOIDGRID_TOKEN`, `VOIDGRID_TOKEN_FILE` and

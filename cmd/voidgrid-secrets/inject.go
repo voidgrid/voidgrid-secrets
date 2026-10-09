@@ -68,6 +68,7 @@ func runInject(args []string) error {
 		return fmt.Errorf("run: %w", err)
 	}
 
+	fmt.Fprintf(os.Stderr, "voidgrid-secrets run: injecting %s\n", runenv.Summary(vars))
 	env, overridden := runenv.Merge(os.Environ(), vars, stripFromChild)
 	for _, name := range overridden {
 		fmt.Fprintf(os.Stderr, "voidgrid-secrets run: %s from voidgrid-secrets replaces an existing environment variable\n", name)

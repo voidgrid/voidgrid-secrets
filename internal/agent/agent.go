@@ -324,6 +324,12 @@ func reconcile(log io.Writer, t *target, secrets []runenv.Secret) error {
 		t.written = map[string][sha256.Size]byte{}
 	}
 
+	if len(secrets) == 0 {
+		logf(log, "target %s: its token has no readable secrets - grant it secrets in the web UI (tokens, then the token)", t.Name)
+	} else {
+		logf(log, "target %s: %d secret(s) granted", t.Name, len(secrets))
+	}
+
 	want := map[string]bool{}
 	for _, s := range secrets {
 		if !envname.Valid(s.EnvName) {
