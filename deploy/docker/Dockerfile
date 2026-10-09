@@ -84,4 +84,9 @@ ENV VOIDGRID_RQLITE_ADDR=http://127.0.0.1:4001 \
 VOLUME ["/data"]
 EXPOSE 8780
 
+# Healthy once the app answers, which needs rqlite up as well. The status
+# route needs no auth and is exempt from the plain-HTTP sign-in policy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:8780/api/v1/setup/status || exit 1
+
 ENTRYPOINT ["/init"]

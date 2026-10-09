@@ -173,6 +173,13 @@ Upgrading from `v0.1.0-beta.1`: the default port changed from 8443 to
 8780. Update the published port in your compose file and any reverse
 proxy, and `VOIDGRID_URL` in consumers.
 
+## Health
+
+The image has a built-in healthcheck: it asks the app for
+`/api/v1/setup/status`, which only answers once the app and its database
+are both up. `docker ps` shows `healthy`, and other services can wait for
+it with `depends_on: voidgrid-secrets: condition: service_healthy`.
+
 ## Restarting
 
 The container restarts fully unattended: the root key comes from its
