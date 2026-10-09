@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/envname"
@@ -134,6 +135,35 @@ func (h *TokensHandler) SubmitRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	audit.Record(r.Context(), h.audit, audit.Event{Actor: audit.User(user.ID), Action: audit.TokenRevoke, ResourceType: "token", ResourceID: id})
 	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
+}
+
+// SubmitUngrant removes a token's grant on one secret.
+func (h *TokensHandler) SubmitUngrant(w http.ResponseWriter, r *http.Request) {
+	user, _ := session.FromContext(r.Context())
+	id, err := idParam(r)
+	if err != nil {
+		http.Error(w, "invalid token id", http.StatusBadRequest)
+		return
+	}
+	secretID, err := strconv.ParseInt(chi.URLParam(r, "secretID"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid secret id", http.StatusBadRequest)
+		return
+	}
+	switch err := h.tokens.RemoveGrant(r.Context(), id, secretID); {
+	case err == nil:
+	case errors.Is(err, storage.ErrNotFound):
+		h.renderDetail(w, r, id, http.StatusNotFound, "that grant no longer exists")
+		return
+	default:
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: audit.User(user.ID), Action: audit.TokenUngrant, ResourceType: "token", ResourceID: id,
+		Details: map[string]string{"secret_id": strconv.FormatInt(secretID, 10)},
+	})
+	http.Redirect(w, r, "/tokens/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 // SubmitGrant grants a token read or write on a secret.

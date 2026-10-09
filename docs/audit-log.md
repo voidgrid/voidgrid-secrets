@@ -17,7 +17,7 @@ Entries older than **14 days** are deleted - at startup and once a day.
 | Setup | `setup_token_rejected`, `setup_account_created`, `setup_completed` |
 | Recovery | `recovery_started`, `recovery_failed`, `recovery_completed`, `break_glass_issued` |
 | Secrets | `secret_create`, `secret_update`, `secret_rename`, `secret_delete`, `reveal`, `access_denied` |
-| Machine tokens | `token_create`, `token_revoke`, `token_grant` |
+| Machine tokens | `token_create`, `token_revoke`, `token_grant`, `token_ungrant` |
 | Housekeeping | `audit_pruned` |
 
 `reveal` covers every way a value leaves the server: the "show" button in

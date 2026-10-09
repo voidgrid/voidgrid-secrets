@@ -26,8 +26,10 @@ permission on **read**, and optionally set the environment variable name
 secret's name (`db-password` becomes `DB_PASSWORD`). The token's page lists
 every secret it can read and the name each will have.
 
-A grant can't be removed on its own; revoke the token (or delete the
-secret) to cut off access.
+To take a secret away from a token, press **remove** next to it on the
+token's page (or revoke the token to cut off everything). `run` reads its
+secrets when the container starts, so restart the container to drop one;
+the agent removes the file on its next poll.
 
 ## 4. Use it from a container
 

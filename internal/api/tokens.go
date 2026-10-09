@@ -48,6 +48,12 @@ func RegisterTokens(api huma.API, h *TokensHandler) {
 		Description: "Granting the same secret again replaces the permission and environment variable name.",
 		Tags:        []string{"tokens"},
 	}, h.Grant)
+	huma.Register(api, huma.Operation{
+		OperationID: "ungrant-token", Method: "DELETE", Path: "/tokens/{id}/grants/{secret_id}",
+		Summary:     "Remove a machine token's grant on one secret",
+		Description: "Takes effect on the token's next request; 'voidgrid-secrets run' reads its secrets at start, the agent drops the file on its next poll.",
+		Tags:        []string{"tokens"},
+	}, h.Ungrant)
 }
 
 // MachineTokenOut is a token's metadata as returned by the API.
@@ -183,6 +189,27 @@ type GrantInput struct {
 		Permission string `json:"permission" enum:"read,write"`
 		EnvName    string `json:"env_name,omitempty" doc:"The environment variable name 'voidgrid-secrets run' and the agent expose this secret under. Omit to derive it from the secret's name (db-password -> DB_PASSWORD)."`
 	}
+}
+
+// UngrantInput names the grant to remove.
+type UngrantInput struct {
+	ID       int64 `path:"id" doc:"Machine token ID"`
+	SecretID int64 `path:"secret_id" doc:"ID of the secret to take away"`
+}
+
+// Ungrant removes a token's grant on one secret.
+func (h *TokensHandler) Ungrant(ctx context.Context, in *UngrantInput) (*struct{}, error) {
+	if err := h.tokens.RemoveGrant(ctx, in.ID, in.SecretID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, huma.Error404NotFound("that token has no grant on that secret")
+		}
+		return nil, huma.Error500InternalServerError("internal error", err)
+	}
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.TokenUngrant, ResourceType: "token", ResourceID: in.ID,
+		Details: map[string]string{"secret_id": itoa(in.SecretID)},
+	})
+	return &struct{}{}, nil
 }
 
 // Grant gives a token read or write on a secret.

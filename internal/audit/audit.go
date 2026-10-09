@@ -49,9 +49,10 @@ const (
 	SecretReveal = "reveal"
 	AccessDenied = "access_denied"
 
-	TokenCreate = "token_create"
-	TokenRevoke = "token_revoke"
-	TokenGrant  = "token_grant"
+	TokenCreate  = "token_create"
+	TokenRevoke  = "token_revoke"
+	TokenGrant   = "token_grant"
+	TokenUngrant = "token_ungrant"
 
 	AuditPruned = "audit_pruned"
 )

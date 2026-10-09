@@ -76,6 +76,7 @@ func NewRouter(deps Deps) http.Handler {
 			r.Get("/tokens/{id}", deps.Tokens.Detail)
 			r.Post("/tokens/{id}/revoke", deps.Tokens.SubmitRevoke)
 			r.Post("/tokens/{id}/grants", deps.Tokens.SubmitGrant)
+			r.Post("/tokens/{id}/grants/{secretID}/remove", deps.Tokens.SubmitUngrant)
 
 			r.Get("/audit", deps.Audit.List)
 		})

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
+	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 	"github.com/voidgrid/voidgrid-secrets/internal/version"
 )
 
@@ -157,5 +159,57 @@ func TestAPIRefusesCrossOriginSessionRequests(t *testing.T) {
 	}
 	if code := revoke("same-origin"); code >= 300 {
 		t.Fatalf("same-origin revoke: %d", code)
+	}
+}
+
+// Removing a grant cuts that one secret off the token immediately, leaves
+// its other grants alone, is audited, and is session-only.
+func TestUngrantOverAPI(t *testing.T) {
+	e := newEnv(t, true)
+	ctx := context.Background()
+	cookie := ownerCookie(t, e)
+	keep, err := e.secrets.Create(ctx, "keep", []byte("k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drop, err := e.secrets.Create(ctx, "drop", []byte("d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, mt, err := e.tokens.Create(ctx, "svc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []int64{keep.ID, drop.ID} {
+		if err := e.tokens.AddGrant(ctx, mt.ID, s, "read", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := fmt.Sprintf("/api/v1/tokens/%d/grants/%d", mt.ID, drop.ID)
+
+	if rec := bearerRequest(t, e, "DELETE", path, "", token); rec.Code != 401 {
+		t.Fatalf("a token removing its own grant: %d, want 401", rec.Code)
+	}
+	if rec := bearerRequest(t, e, "GET", fmt.Sprintf("/api/v1/secrets/%d", drop.ID), "", token); rec.Code != 200 {
+		t.Fatalf("before removal: %d", rec.Code)
+	}
+	if rec := doJSON(t, e.handler, "DELETE", path, "", cookie); rec.Code != 204 {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := bearerRequest(t, e, "GET", fmt.Sprintf("/api/v1/secrets/%d", drop.ID), "", token); rec.Code != 403 {
+		t.Fatalf("after removal: %d, want 403", rec.Code)
+	}
+	if rec := bearerRequest(t, e, "GET", fmt.Sprintf("/api/v1/secrets/%d", keep.ID), "", token); rec.Code != 200 {
+		t.Fatalf("other grant after removal: %d, want 200", rec.Code)
+	}
+	if rec := doJSON(t, e.handler, "DELETE", path, "", cookie); rec.Code != 404 {
+		t.Fatalf("remove again: %d, want 404", rec.Code)
+	}
+	if rec := doJSON(t, e.handler, "DELETE", "/api/v1/tokens/9999/grants/1", "", cookie); rec.Code != 404 {
+		t.Fatalf("unknown token: %d, want 404", rec.Code)
+	}
+	entries, err := storage.NewAuditRepo(e.db).List(ctx, storage.AuditFilter{Action: audit.TokenUngrant, Limit: 10})
+	if err != nil || len(entries) != 1 || entries[0].ResourceID != mt.ID {
+		t.Fatalf("audit entries = %+v, %v", entries, err)
 	}
 }

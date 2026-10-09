@@ -308,4 +308,14 @@ func TestEnvETagSkipsUnchangedPollsWithoutAuditing(t *testing.T) {
 	if n := countTokenReveals(t, e.baseURL, mt.ID); n != 4 {
 		t.Fatalf("audit rows = %d, want 4 (1 + 1 after update + 2 after new grant)", n)
 	}
+
+	// Removing a grant changes the ETag too, so the agent drops that file.
+	afterGrant := rec.Header().Get("ETag")
+	if err := e.tokens.RemoveGrant(ctx, mt.ID, second.ID); err != nil {
+		t.Fatalf("RemoveGrant: %v", err)
+	}
+	rec = getEnvIfNoneMatch(t, e, plaintext, afterGrant)
+	if rec.Code != http.StatusOK || rec.Header().Get("ETag") == afterGrant {
+		t.Fatalf("after removing a grant: status = %d, ETag unchanged = %v", rec.Code, rec.Header().Get("ETag") == afterGrant)
+	}
 }

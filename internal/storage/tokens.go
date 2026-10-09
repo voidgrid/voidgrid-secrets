@@ -152,6 +152,22 @@ func (r *TokenRepo) AddGrant(ctx context.Context, tokenID, secretID int64, permi
 	return nil
 }
 
+// RemoveGrant takes away a token's grant on one secret. It returns
+// ErrNotFound if the token has no such grant.
+func (r *TokenRepo) RemoveGrant(ctx context.Context, tokenID, secretID int64) error {
+	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+		Query:     `DELETE FROM machine_token_grants WHERE token_id = ? AND secret_id = ?`,
+		Arguments: []interface{}{tokenID, secretID},
+	}})
+	if err := writeErr("remove grant", results, err); err != nil {
+		return err
+	}
+	if results[0].RowsAffected == 0 {
+		return fmt.Errorf("%w: token %d has no grant on secret %d", ErrNotFound, tokenID, secretID)
+	}
+	return nil
+}
+
 // List returns every machine token, newest first.
 func (r *TokenRepo) List(ctx context.Context) ([]model.MachineToken, error) {
 	qr, err := r.db.conn.QueryOneContext(ctx, `SELECT `+tokenColumns+` FROM machine_tokens ORDER BY id DESC`)

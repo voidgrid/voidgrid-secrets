@@ -161,3 +161,43 @@ func TestDeletingASecretRemovesItsGrants(t *testing.T) {
 		t.Fatalf("grants after delete = %+v, %v", grants, err)
 	}
 }
+
+func TestRemoveGrantTakesOnlyThatGrant(t *testing.T) {
+	db, _ := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewTokenRepo(db)
+	keep, drop := createTestSecret(t, db, "keep"), createTestSecret(t, db, "drop")
+	_, mt, err := repo.Create(ctx, "svc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, other, err := repo.Create(ctx, "other", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range []struct{ tok, sec int64 }{{mt.ID, keep.ID}, {mt.ID, drop.ID}, {other.ID, drop.ID}} {
+		if err := repo.AddGrant(ctx, g.tok, g.sec, "read", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := repo.RemoveGrant(ctx, mt.ID, drop.ID); err != nil {
+		t.Fatalf("RemoveGrant: %v", err)
+	}
+	grants, err := repo.ListGrants(ctx, mt.ID)
+	if err != nil || len(grants) != 1 || grants[0].SecretID != keep.ID {
+		t.Fatalf("grants after remove = %+v, %v", grants, err)
+	}
+	if env, err := repo.EnvGrants(ctx, mt.ID); err != nil || len(env) != 1 || env[0].SecretID != keep.ID {
+		t.Fatalf("env grants after remove = %+v, %v", env, err)
+	}
+	if g, err := repo.ListGrants(ctx, other.ID); err != nil || len(g) != 1 {
+		t.Fatalf("another token's grant on the same secret was touched: %+v, %v", g, err)
+	}
+	if err := repo.RemoveGrant(ctx, mt.ID, drop.ID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("removing twice = %v, want ErrNotFound", err)
+	}
+	if err := repo.RemoveGrant(ctx, 9999, keep.ID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("unknown token = %v, want ErrNotFound", err)
+	}
+}

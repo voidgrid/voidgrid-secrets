@@ -33,6 +33,7 @@ type env struct {
 	sessions   *storage.SessionRepo
 	secrets    *storage.SecretRepo
 	authConfig *storage.AuthConfigRepo
+	tokens     *storage.TokenRepo
 }
 
 const testSetupToken = "vgs_setup_test" //nolint:gosec // fake test fixture, not a real credential
@@ -119,7 +120,7 @@ func newEnv(t *testing.T) env {
 		Audit:   web.NewAuditHandler(auditRepo, tokenRepo),
 	})
 
-	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo}
+	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo, tokens: tokenRepo}
 }
 
 func freePort(t *testing.T) int {

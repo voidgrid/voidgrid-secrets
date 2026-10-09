@@ -93,3 +93,51 @@ func TestWebSecretRenameAndDelete(t *testing.T) {
 		t.Fatalf("after delete: %d", rec.Code)
 	}
 }
+
+func TestWebRemoveGrant(t *testing.T) {
+	e := newEnv(t)
+	completeSetupDirect(t, e)
+	cookie := ownerSession(t, e)
+	ctx := context.Background()
+	keep, err := e.secrets.Create(ctx, "keep-me", []byte("v"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drop, err := e.secrets.Create(ctx, "drop-me", []byte("v"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := e.tokens
+	_, mt, err := tokens.Create(ctx, "svc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []int64{keep.ID, drop.ID} {
+		if err := tokens.AddGrant(ctx, mt.ID, s, "read", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tid := strconv.FormatInt(mt.ID, 10)
+	page := get(t, e, "/tokens/"+tid, cookie)
+	if !strings.Contains(page.Body.String(), "/tokens/"+tid+"/grants/"+strconv.FormatInt(drop.ID, 10)+"/remove") {
+		t.Fatalf("token page has no remove button for the grant: %s", page.Body.String())
+	}
+
+	removePath := "/tokens/" + tid + "/grants/" + strconv.FormatInt(drop.ID, 10) + "/remove"
+	if rec := doForm(t, e.handler, removePath, url.Values{}, nil); rec.Header().Get("Location") != "/login" {
+		t.Fatalf("signed-out remove: %d to %q, want a redirect to /login", rec.Code, rec.Header().Get("Location"))
+	}
+	if g, _ := tokens.ListGrants(ctx, mt.ID); len(g) != 2 {
+		t.Fatalf("a signed-out request removed a grant: %+v", g)
+	}
+	if rec := doForm(t, e.handler, removePath, url.Values{}, cookie); rec.Code != http.StatusSeeOther {
+		t.Fatalf("remove: %d", rec.Code)
+	}
+	grants, err := tokens.ListGrants(ctx, mt.ID)
+	if err != nil || len(grants) != 1 || grants[0].SecretID != keep.ID {
+		t.Fatalf("grants after remove = %+v, %v", grants, err)
+	}
+	if rec := doForm(t, e.handler, removePath, url.Values{}, cookie); rec.Code != http.StatusNotFound {
+		t.Fatalf("remove again: %d, want 404", rec.Code)
+	}
+}

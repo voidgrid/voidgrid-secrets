@@ -5,9 +5,10 @@
 <h2>secrets this token can read</h2>
 {{if .Grants}}
 <table>
-    <tr><th>secret</th><th>permission</th><th>environment variable</th></tr>
+    <tr><th>secret</th><th>permission</th><th>environment variable</th><th></th></tr>
     {{range .Grants}}
-    <tr><td><a href="/secrets/{{.SecretID}}">{{.SecretName}}</a></td><td>{{.Permission}}</td><td><code>{{.EffectiveEnvName}}</code>{{if not .EnvName}} <span class="muted">(derived)</span>{{end}}</td></tr>
+    <tr><td><a href="/secrets/{{.SecretID}}">{{.SecretName}}</a></td><td>{{.Permission}}</td><td><code>{{.EffectiveEnvName}}</code>{{if not .EnvName}} <span class="muted">(derived)</span>{{end}}</td>
+        <td><form method="post" action="/tokens/{{$.Token.ID}}/grants/{{.SecretID}}/remove"><button type="submit">remove</button></form></td></tr>
     {{end}}
 </table>
 <p class="muted"><code>voidgrid-secrets run</code> and the agent expose each secret under its environment variable name.</p>
