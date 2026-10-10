@@ -8,6 +8,8 @@ now. Pin a specific version tag for anything you rely on.
 The container runs unprivileged, as UID/GID 1000 - every process,
 including the s6 supervisor. Nothing in it needs root.
 
+Something not working? See [troubleshooting.md](troubleshooting.md).
+
 ## 1. Generate the root key
 
 The root encryption key encrypts every secret. The service refuses to
@@ -84,9 +86,9 @@ ranges.) How it works:
   browser's. That is fine when the proxy speaks HTTPS to browsers; if
   you want to allow plain HTTP through it, list the proxy's network.
 - With a published Docker port, connections made from the Docker host
-  itself can appear to come from the Docker bridge gateway (for example
-  `172.17.0.1`) rather than `127.0.0.1`. Add that range if you sign in
-  from the host.
+  itself appear to come from the compose network's gateway (for example
+  `172.19.0.1`, measured), not `127.0.0.1`. Add `172.16.0.0/12`, which covers
+  Docker's default ranges, if you sign in from the host.
 
 The published port in the example compose file is open on all interfaces,
 which this setup needs. If a proxy on the same host is the only client,

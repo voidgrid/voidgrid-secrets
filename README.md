@@ -56,6 +56,9 @@ unprivileged as UID/GID 1000.
   password + TOTP, OIDC (including the callback URL to register with your
   provider), account recovery and the break-glass `recover` command,
   sessions, and sign-in lockout.
+- [docs/troubleshooting.md](docs/troubleshooting.md) - symptoms and fixes:
+  sign-in refused over HTTP, a container that won't start, an app that
+  starts without its secrets, agent problems.
 - [docs/audit-log.md](docs/audit-log.md) - what's recorded, and the
   viewer at `/audit`.
 - [docs/runtime-injection.md](docs/runtime-injection.md) -
