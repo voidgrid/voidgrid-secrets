@@ -334,7 +334,7 @@ the provider reachable, and recovery-code login keeps working meanwhile.
 
 ## Environment variables
 
-The first three are set in the image; you normally don't need to change
+The first three are set in the image (the export directory follows the database path); you normally don't need to change
 them. `VOIDGRID_HTTP_ALLOWED_NETS` is yours to set.
 
 | Variable | Default in the image | Purpose |
@@ -342,6 +342,7 @@ them. `VOIDGRID_HTTP_ALLOWED_NETS` is yours to set.
 | `VOIDGRID_LISTEN_ADDR` | `0.0.0.0:8780` | Address the API + web UI bind to |
 | `VOIDGRID_DB_PATH` | `/data/voidgrid.db` | The SQLite database file |
 | `VOIDGRID_ROOT_KEY_PATH` | `/run/secrets/voidgrid-root-key` | Root encryption key file |
+| `VOIDGRID_EXPORT_DIR` | `bin` beside the database (`/data/bin`) | Where the server publishes its own executable for consumers to mount; empty turns it off. See [runtime-injection.md](runtime-injection.md#2-get-the-binary-into-the-container) |
 | `VOIDGRID_HTTP_ALLOWED_NETS` | empty | Comma-separated CIDRs allowed to sign in over plain HTTP; see [section 3](#3-https-or-a-trusted-network) |
 
 ## Using secrets from other containers

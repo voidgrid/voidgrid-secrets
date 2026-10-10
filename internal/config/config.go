@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/httpsec"
 )
@@ -23,6 +24,11 @@ type Config struct {
 	// unseal the secret store on startup.
 	RootKeyPath string
 
+	// ExportDir is where the server publishes its own executable at start,
+	// for other containers to mount and run `voidgrid-secrets run` from.
+	// Empty disables it. Default: a "bin" directory beside the database.
+	ExportDir string
+
 	// HTTPAllowedNets lists networks (home LAN, Tailscale) whose sign-ins
 	// over plain HTTP are allowed. Empty means Secure cookies everywhere.
 	HTTPAllowedNets []netip.Prefix
@@ -35,12 +41,20 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("VOIDGRID_HTTP_ALLOWED_NETS: %w", err)
 	}
-	return Config{
+	cfg := Config{
 		ListenAddr:      getEnv("VOIDGRID_LISTEN_ADDR", ":8780"),
 		DBPath:          getEnv("VOIDGRID_DB_PATH", "/data/voidgrid.db"),
 		RootKeyPath:     getEnv("VOIDGRID_ROOT_KEY_PATH", "/run/secrets/voidgrid-root-key"),
 		HTTPAllowedNets: nets,
-	}, nil
+	}
+	// An explicitly empty VOIDGRID_EXPORT_DIR switches the export off, so
+	// this reads the variable directly instead of treating "" as unset.
+	if v, set := os.LookupEnv("VOIDGRID_EXPORT_DIR"); set {
+		cfg.ExportDir = v
+	} else {
+		cfg.ExportDir = filepath.Join(filepath.Dir(cfg.DBPath), "bin")
+	}
+	return cfg, nil
 }
 
 func getEnv(key, fallback string) string {

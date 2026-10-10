@@ -45,6 +45,12 @@ services:
   # --- Example consumer. Uncomment this block, the voidgrid-bin volume and
   # the secrets block at the bottom.
   #
+  # The server also publishes its own binary to /data/bin on every start.
+  # If you bind-mount the server's data (./data:/data) - with data/bin
+  # created first, owned by UID 1000 - consumers can mount
+  # ./data/bin:/opt/voidgrid:ro and skip the helper below entirely. See
+  # docs/runtime-injection.md, "Sharing the server's binary".
+  #
   # 1. In the web UI (tokens), create a token for this service and
   #    grant it "read" on each secret it needs, with the environment
   #    variable name the app expects (or leave it blank to derive one).

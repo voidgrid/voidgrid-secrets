@@ -96,6 +96,15 @@ docker compose logs voidgrid-secrets
   through another container (a restore, for example); fix it with `chown
   1000:1000` on the directory and `voidgrid.db`, as in the restore command in
   [deployment.md](deployment.md#backup-and-restore).
+- **`export: could not publish the executable to ... `** - a warning, not a
+  failure: the server is running, but it couldn't write its copy for
+  consumers to mount (the directory isn't writable by UID 1000). The usual
+  cause is a bind-mounted `data/bin` that Docker created as root because a
+  consumer started with it before it existed: remove it, then `mkdir -p
+  data/bin` as the right user and restart the server. Otherwise fix the
+  directory's owner, set `VOIDGRID_EXPORT_DIR` to a writable path, or use a
+  helper container instead ([runtime-injection.md](runtime-injection.md#2-get-the-binary-into-the-container)).
+  Details: [Sharing the server's binary](runtime-injection.md#sharing-the-servers-binary).
 - **`found an old rqlite data directory ... but no database`** - you
   upgraded from `v0.1.0-beta.5` or earlier without exporting your data. Nothing
   is lost; follow [Moving from rqlite](deployment.md#moving-from-rqlite).

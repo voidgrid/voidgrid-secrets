@@ -37,7 +37,17 @@ Give each service its own token, scoped to just its secrets.
 ## 2. Get the binary into the container
 
 The binary is fully static, so it runs in any linux/amd64 image, including
-distroless and scratch images. Either:
+distroless and scratch images. Pick one:
+
+- **From the server itself (recommended).** On every start the server
+  publishes a copy of its own executable into a `bin` directory beside its
+  database (`/data/bin`; change it with `VOIDGRID_EXPORT_DIR`, or set that to
+  empty to turn it off). Any container can mount that directory read-only and
+  use the binary: no helper container, no custom image, and upgrading the
+  server refreshes the file. The copy is replaced atomically and only when it
+  changed. Mount it with a **bind mount** or a **named-volume subpath**; both
+  are described in [Sharing the server's binary](#sharing-the-servers-binary)
+  below.
 
 - **In your own Dockerfile:**
 
@@ -45,8 +55,13 @@ distroless and scratch images. Either:
   COPY --from=ghcr.io/voidgrid/voidgrid-secrets:beta /usr/local/bin/voidgrid-secrets /usr/local/bin/voidgrid-secrets
   ```
 
-- **Without building an image**, with a one-shot compose service that
-  copies it into a shared volume (see `examples/docker-compose.yml`):
+- **With a helper service**, a one-shot compose service that copies it into
+  a shared volume (see `examples/docker-compose.yml`). It leaves a stopped
+  `voidgrid-secrets-bin` container behind (`docker ps -a` shows it as
+  `Exited (0)`; one per compose project, however many consumers share it).
+  To avoid even that, add `profiles: ["setup"]` to the helper, drop it from
+  the consumers' `depends_on`, and refresh the copy with `docker compose run
+  --rm voidgrid-secrets-bin` before the first start and after upgrades:
 
   ```yaml
   voidgrid-secrets-bin:
@@ -65,6 +80,91 @@ distroless and scratch images. Either:
     volumes:
       - voidgrid-bin:/opt/voidgrid:ro
   ```
+
+### Sharing the server's binary
+
+Mount only the `bin` directory in consumers, **never `/data` itself** - `/data`
+also holds the database. `bin` holds just the executable, which isn't secret.
+
+**Bind mount** (the server's `/data` is a host directory):
+
+1. Create the directories first, owned by the user the server runs as (UID
+   1000; if your host user is different, `sudo chown -R 1000:1000 data`):
+
+   ```
+   mkdir -p data/bin
+   ```
+
+   This matters. Compose creates every container before it starts any, so a
+   consumer's bind mount of a path that doesn't exist yet is created by
+   Docker as root - and then the server cannot publish into it (it logs
+   `export: could not publish ...` and carries on without).
+
+2. The server mounts the directory:
+
+   ```yaml
+   voidgrid-secrets:
+     volumes:
+       - ./data:/data
+   ```
+
+3. Each consumer mounts `data/bin` read-only. The long syntax with
+   `create_host_path: false` turns a missing path into an error instead of a
+   root-owned directory:
+
+   ```yaml
+   myapp:
+     depends_on:
+       voidgrid-secrets:
+         condition: service_healthy
+     volumes:
+       - type: bind
+         source: ./data/bin
+         target: /opt/voidgrid
+         read_only: true
+         bind:
+           create_host_path: false
+   ```
+
+   `service_healthy` makes the consumer wait for the server, which publishes
+   the binary before it starts answering. From a different compose project,
+   use the absolute path as `source` (and start the server first).
+
+**Named volume** (the server uses `voidgrid-data:/data`), Docker Engine 26 or
+newer. The consumer mounts just the `bin` subdirectory of that volume:
+
+```yaml
+myapp:
+  depends_on:
+    voidgrid-secrets:
+      condition: service_healthy
+  volumes:
+    - type: volume
+      source: voidgrid-data
+      target: /opt/voidgrid
+      read_only: true
+      volume:
+        subpath: bin
+```
+
+No pre-creation is needed here; the server creates `bin` inside the volume.
+From a different compose project, declare the server's volume as external under
+its real name (`docker volume ls | grep voidgrid` shows it; compose prefixes
+it with the server's project name) and use that as `source`:
+
+```yaml
+volumes:
+  serverdata:
+    external: true
+    name: myproject_voidgrid-data
+```
+
+Either way the consumer's entrypoint is
+`["/opt/voidgrid/voidgrid-secrets", "run", "--"]`, as in step 3. All of this
+was run against a built image: a consumer as an unrelated user got its secret
+through the shared binary, in the same project and from another, with both a
+bind mount and a named-volume subpath, and the database was not visible to
+the consumer.
 
 ## 3. Wrap the service's command
 
@@ -94,6 +194,11 @@ secrets:
 ```
 
 The token file must be readable by the user the container runs as.
+
+This example uses the helper service from step 2. If you mount the binary
+the server publishes instead, drop the `depends_on` block and replace the
+`voidgrid-bin` volume line with `./data/bin:/opt/voidgrid:ro` (the entrypoint
+stays the same).
 
 ### File mode for `*_FILE` images
 
@@ -163,22 +268,25 @@ themselves.
 
 ## Updating `run`
 
-The copy of `voidgrid-secrets` in your consumer stack is only refreshed when
-its helper service runs again. With the helper from step 2, a plain
-`docker compose up -d` starts it again every time, and recreates it when the
-image behind the tag has changed, so after pulling:
+If your consumers mount the copy the server publishes (`data/bin`), it is
+refreshed whenever the server starts on a new image. Upgrade the server,
+then restart the consumers so they start with the new copy:
+
+```
+docker compose restart myapp
+```
+
+With a helper service instead, the copy is only refreshed when that service
+runs again. A plain `docker compose up -d` starts it again every time, and
+recreates it when the image behind the tag has changed, so after pulling:
 
 ```
 docker compose pull; docker compose up -d
 ```
 
-the copy on disk is the new one. Your running consumer is not touched: `run`
-replaced itself with your app at start, so the old process keeps running
-unchanged. The consumer uses the new copy the next time it starts:
-
-```
-docker compose restart myapp
-```
+the copy on disk is the new one. In both cases your running consumer is not
+touched: `run` replaced itself with your app at start, so the old process
+keeps running unchanged, and it uses the new copy the next time it starts.
 
 If you pin the image to a version tag, change the tag in your compose file
 first. You only need to refresh it for new behavior in `run` itself: it

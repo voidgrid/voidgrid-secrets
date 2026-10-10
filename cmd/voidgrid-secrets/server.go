@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/httpsec"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/recovery"
+	"github.com/voidgrid/voidgrid-secrets/internal/selfexport"
 	"github.com/voidgrid/voidgrid-secrets/internal/setup"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 	"github.com/voidgrid/voidgrid-secrets/internal/version"
@@ -50,6 +52,7 @@ func runServer(cfg config.Config) error {
 	if err := db.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
+	publishSelf(cfg.ExportDir)
 	if problems, err := db.CheckIntegrity(context.Background()); err != nil {
 		log.Printf("database check could not run: %v", err)
 	} else {
@@ -174,6 +177,27 @@ func runServer(cfg config.Config) error {
 			return fmt.Errorf("shutdown: %w", err)
 		}
 		return nil
+	}
+}
+
+// publishSelf copies this executable into dir (if set) so other containers
+// can mount it and use `voidgrid-secrets run`. Failing to do so is logged,
+// never fatal: the server's own job doesn't depend on it.
+func publishSelf(dir string) {
+	if dir == "" {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("export: cannot find this executable: %v", err)
+		return
+	}
+	res, err := selfexport.Publish(exe, dir)
+	switch {
+	case err != nil:
+		log.Printf("export: could not publish the executable to %s (consumers can still use a helper container): %v", dir, err)
+	case res.Updated:
+		log.Printf("export: published %s for consumers to mount", res.Path)
 	}
 }
 
