@@ -7,23 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rqlite/gorqlite"
-
 	authtoken "github.com/voidgrid/voidgrid-secrets/internal/auth/token"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
 
-func rawExec(t *testing.T, baseURL, query string, args ...interface{}) {
+func rawExec(t *testing.T, db *storage.DB, query string, args ...interface{}) {
 	t.Helper()
-	conn, err := gorqlite.Open(baseURL)
-	if err != nil {
-		t.Fatalf("open raw connection: %v", err)
-	}
-	defer conn.Close()
-	res, err := conn.WriteParameterizedContext(context.Background(), []gorqlite.ParameterizedStatement{{Query: query, Arguments: args}})
-	if err != nil || res[0].Err != nil {
+	if _, err := db.SQL().ExecContext(context.Background(), query, args...); err != nil {
 		t.Fatalf("exec %q: %v", query, err)
 	}
 }
@@ -38,7 +30,7 @@ func createTestSecret(t *testing.T, db *storage.DB, name string) model.Secret {
 }
 
 func TestTokenAuthenticateRejectsWrongRevokedAndExpired(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewTokenRepo(db)
 
@@ -72,7 +64,7 @@ func TestTokenAuthenticateRejectsWrongRevokedAndExpired(t *testing.T) {
 }
 
 func TestTokenGrantsUseExplicitOrDerivedNames(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewTokenRepo(db)
 	dbPass := createTestSecret(t, db, "db-password")
@@ -112,7 +104,7 @@ func TestTokenGrantsUseExplicitOrDerivedNames(t *testing.T) {
 }
 
 func TestTokenGrantProblemsAreRefused(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewTokenRepo(db)
 	a := createTestSecret(t, db, "a")
@@ -144,7 +136,7 @@ func TestTokenGrantProblemsAreRefused(t *testing.T) {
 }
 
 func TestDeletingASecretRemovesItsGrants(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewTokenRepo(db)
 	s := createTestSecret(t, db, "doomed")
@@ -164,7 +156,7 @@ func TestDeletingASecretRemovesItsGrants(t *testing.T) {
 }
 
 func TestRemoveGrantTakesOnlyThatGrant(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewTokenRepo(db)
 	keep, drop := createTestSecret(t, db, "keep"), createTestSecret(t, db, "drop")
@@ -204,7 +196,7 @@ func TestRemoveGrantTakesOnlyThatGrant(t *testing.T) {
 }
 
 func TestSetGrantsReplacesTheWholeSetAtomically(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewTokenRepo(db)
 	a, b, c := createTestSecret(t, db, "a-key"), createTestSecret(t, db, "b-key"), createTestSecret(t, db, "c-key")
@@ -273,7 +265,7 @@ func TestSetGrantsReplacesTheWholeSetAtomically(t *testing.T) {
 }
 
 func TestGrantableToHidesGrantedRevokedAndExpiredTokens(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewTokenRepo(db)
 	s := createTestSecret(t, db, "shared")

@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rqlite/gorqlite"
-
 	gosession "github.com/voidgrid/voidgrid-secrets/internal/auth/session"
+	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
 
 type envResponse struct {
@@ -37,23 +36,12 @@ func getEnv(t *testing.T, e env, authHeader string, cookie *http.Cookie) *httpte
 	return rec
 }
 
-func countTokenReveals(t *testing.T, baseURL string, tokenID int64) int64 {
+func countTokenReveals(t *testing.T, db *storage.DB, tokenID int64) int64 {
 	t.Helper()
-	conn, err := gorqlite.Open(baseURL)
-	if err != nil {
-		t.Fatalf("open raw connection: %v", err)
-	}
-	defer conn.Close()
-	qr, err := conn.QueryOneParameterizedContext(context.Background(), gorqlite.ParameterizedStatement{
-		Query:     `SELECT COUNT(*) FROM audit_log WHERE actor_type = 'token' AND actor_id = ? AND action = 'reveal'`,
-		Arguments: []interface{}{tokenID},
-	})
-	if err != nil || !qr.Next() {
-		t.Fatalf("count audit rows: %v", err)
-	}
 	var n int64
-	if err := qr.Scan(&n); err != nil {
-		t.Fatalf("scan audit count: %v", err)
+	if err := db.SQL().QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM audit_log WHERE actor_type = 'token' AND actor_id = ? AND action = 'reveal'`, tokenID).Scan(&n); err != nil {
+		t.Fatalf("count audit rows: %v", err)
 	}
 	return n
 }
@@ -113,7 +101,7 @@ func TestEnvReturnsGrantedSecretsWithNamesAndAudits(t *testing.T) {
 		}
 	}
 
-	if n := countTokenReveals(t, e.baseURL, mt.ID); n != 2 {
+	if n := countTokenReveals(t, e.db, mt.ID); n != 2 {
 		t.Fatalf("audit rows for token reveals = %d, want 2", n)
 	}
 }
@@ -198,20 +186,12 @@ func TestEnvRejectsDuplicateNamesWithoutLeakingValues(t *testing.T) {
 
 	// AddACL refuses collisions, so write the conflicting rows directly, as
 	// pre-existing data would look.
-	conn, err := gorqlite.Open(e.baseURL)
-	if err != nil {
-		t.Fatalf("open raw connection: %v", err)
-	}
-	defer conn.Close()
-	stmts := []gorqlite.ParameterizedStatement{}
 	for _, id := range []int64{a.ID, b.ID} {
-		stmts = append(stmts, gorqlite.ParameterizedStatement{
-			Query:     `INSERT INTO machine_token_grants (token_id, secret_id, permission, env_name) VALUES (?, ?, 'read', 'SAME_NAME')`,
-			Arguments: []interface{}{mt.ID, id},
-		})
-	}
-	if wr, err := conn.WriteParameterizedContext(ctx, stmts); err != nil || wr[0].Err != nil || wr[1].Err != nil {
-		t.Fatalf("insert conflicting grants: %v", err)
+		if _, err := e.db.SQL().ExecContext(ctx,
+			`INSERT INTO machine_token_grants (token_id, secret_id, permission, env_name) VALUES (?, ?, 'read', 'SAME_NAME')`,
+			mt.ID, id); err != nil {
+			t.Fatalf("insert conflicting grants: %v", err)
+		}
 	}
 
 	rec := getEnv(t, e, "Bearer "+plaintext, nil)
@@ -222,7 +202,7 @@ func TestEnvRejectsDuplicateNamesWithoutLeakingValues(t *testing.T) {
 	if !strings.Contains(body, "SAME_NAME") || strings.Contains(body, "value-a") || strings.Contains(body, "value-b") {
 		t.Fatalf("409 body should name the variable and contain no values, got %s", body)
 	}
-	if n := countTokenReveals(t, e.baseURL, mt.ID); n != 0 {
+	if n := countTokenReveals(t, e.db, mt.ID); n != 0 {
 		t.Fatalf("audit rows = %d, want 0 (nothing was revealed)", n)
 	}
 }
@@ -279,7 +259,7 @@ func TestEnvETagSkipsUnchangedPollsWithoutAuditing(t *testing.T) {
 	if got := rec.Header().Get("ETag"); got != etag {
 		t.Fatalf("304 ETag = %q, want %q", got, etag)
 	}
-	if n := countTokenReveals(t, e.baseURL, mt.ID); n != 1 {
+	if n := countTokenReveals(t, e.db, mt.ID); n != 1 {
 		t.Fatalf("audit rows after unchanged poll = %d, want 1", n)
 	}
 
@@ -305,7 +285,7 @@ func TestEnvETagSkipsUnchangedPollsWithoutAuditing(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Header().Get("ETag") == afterUpdate {
 		t.Fatalf("after new grant: status = %d, ETag unchanged = %v", rec.Code, rec.Header().Get("ETag") == afterUpdate)
 	}
-	if n := countTokenReveals(t, e.baseURL, mt.ID); n != 4 {
+	if n := countTokenReveals(t, e.db, mt.ID); n != 4 {
 		t.Fatalf("audit rows = %d, want 4 (1 + 1 after update + 2 after new grant)", n)
 	}
 

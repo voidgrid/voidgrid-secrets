@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,7 +29,7 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/web"
 )
 
-// runServer loads the root key, connects to rqlite, runs migrations, wires
+// runServer loads the root key, opens the SQLite database, runs migrations, wires
 // up every repository and handler, and serves the combined API + web UI
 // router until the process is killed.
 func runServer(cfg config.Config) error {
@@ -36,14 +38,24 @@ func runServer(cfg config.Config) error {
 		return fmt.Errorf("load root key (run 'voidgrid-secrets keygen' first if this is a new deployment): %w", err)
 	}
 
-	db, err := storage.Open(cfg.RqliteAddr)
+	if err := storage.CheckLegacy(cfg.DBPath); err != nil {
+		return err
+	}
+	db, err := storage.Open(cfg.DBPath)
 	if err != nil {
-		return fmt.Errorf("connect to rqlite: %w", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
 	if err := db.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
+	}
+	if problems, err := db.CheckIntegrity(context.Background()); err != nil {
+		log.Printf("database check could not run: %v", err)
+	} else {
+		for _, p := range problems {
+			log.Printf("DATABASE PROBLEM: %s", p)
+		}
 	}
 
 	auditRepo := storage.NewAuditRepo(db)
@@ -143,7 +155,26 @@ func runServer(cfg config.Config) error {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 	}
-	return srv.ListenAndServe()
+
+	// This process is PID 1 in the container: handle SIGTERM (docker stop)
+	// by finishing in-flight requests and closing the database cleanly, so
+	// its write-ahead log is checkpointed.
+	stop, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe() }()
+	select {
+	case err := <-serveErr:
+		return err
+	case <-stop.Done():
+		log.Printf("shutting down")
+		ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		if err := srv.Shutdown(ctx); err != nil {
+			return fmt.Errorf("shutdown: %w", err)
+		}
+		return nil
+	}
 }
 
 // loadOIDCProvider builds the deployment's OIDC client at startup, if

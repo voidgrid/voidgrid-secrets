@@ -7,21 +7,19 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rqlite/gorqlite"
-
 	"github.com/voidgrid/voidgrid-secrets/migrations"
 )
 
 // Migrate applies any migration files embedded in the migrations package
 // that have not yet been recorded in the schema_migrations table, in
-// filename order.
+// filename order. Each file is applied, and recorded, in one transaction.
 func (db *DB) Migrate(ctx context.Context) error {
-	if _, err := db.conn.WriteContext(ctx, []string{
+	if _, err := db.sql.ExecContext(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version TEXT PRIMARY KEY,
-			applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+			applied_at TEXT NOT NULL
 		)`,
-	}); err != nil {
+	); err != nil {
 		return fmt.Errorf("storage: ensure schema_migrations table: %w", err)
 	}
 
@@ -45,19 +43,20 @@ func (db *DB) Migrate(ctx context.Context) error {
 			return fmt.Errorf("storage: read migration %s: %w", name, err)
 		}
 
-		statements := splitStatements(string(raw))
-		if len(statements) == 0 {
+		var stmts []Statement
+		for _, q := range splitStatements(string(raw)) {
+			stmts = append(stmts, Statement{Query: q})
+		}
+		if len(stmts) == 0 {
 			continue
 		}
-
-		if _, err := db.conn.WriteContext(ctx, statements); err != nil {
-			return fmt.Errorf("storage: apply migration %s: %w", name, err)
-		}
-
-		if _, err := db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
-			{Query: "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)", Arguments: []interface{}{name, nowTimestamp()}},
-		}); err != nil {
-			return fmt.Errorf("storage: record migration %s: %w", name, err)
+		stmts = append(stmts, Statement{
+			Query:     "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+			Arguments: []interface{}{name, nowTimestamp()},
+		})
+		results, err := db.write(ctx, stmts)
+		if err := writeErrAll("apply migration "+name, results, err); err != nil {
+			return err
 		}
 	}
 
@@ -81,23 +80,17 @@ func migrationFileNames() ([]string, error) {
 }
 
 func (db *DB) appliedMigrations(ctx context.Context) (map[string]bool, error) {
-	results, err := db.conn.QueryContext(ctx, []string{"SELECT version FROM schema_migrations"})
+	qr, err := db.queryString(ctx, "SELECT version FROM schema_migrations")
 	if err != nil {
 		return nil, fmt.Errorf("storage: list applied migrations: %w", err)
 	}
-
 	applied := make(map[string]bool)
-	for _, qr := range results {
-		if qr.Err != nil {
-			return nil, fmt.Errorf("storage: list applied migrations: %w", qr.Err)
+	for qr.Next() {
+		var version string
+		if err := qr.Scan(&version); err != nil {
+			return nil, fmt.Errorf("storage: scan applied migration: %w", err)
 		}
-		for qr.Next() {
-			var version string
-			if err := qr.Scan(&version); err != nil {
-				return nil, fmt.Errorf("storage: scan applied migration: %w", err)
-			}
-			applied[version] = true
-		}
+		applied[version] = true
 	}
 	return applied, nil
 }

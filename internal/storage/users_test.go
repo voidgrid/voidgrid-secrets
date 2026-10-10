@@ -11,7 +11,7 @@ import (
 )
 
 func TestAccountDoesNotExistUntilSetup(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 	if _, err := repo.Get(context.Background()); !errors.Is(err, storage.ErrUserNotFound) {
 		t.Fatalf("Get = %v, want ErrUserNotFound", err)
@@ -19,7 +19,7 @@ func TestAccountDoesNotExistUntilSetup(t *testing.T) {
 }
 
 func TestPasswordAccountRoundTrip(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 
@@ -49,7 +49,7 @@ func TestPasswordAccountRoundTrip(t *testing.T) {
 // Setup can be restarted before it's confirmed; there is still only one
 // account afterwards.
 func TestSetupReplacesTheOneAccount(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 
@@ -70,7 +70,7 @@ func TestSetupReplacesTheOneAccount(t *testing.T) {
 }
 
 func TestOIDCOwnerAcceptsOnlyTheAccountsIdentity(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 

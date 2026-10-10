@@ -12,7 +12,7 @@ import (
 )
 
 func TestGroupLifecycleAndNames(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewGroupRepo(db)
 
@@ -57,7 +57,7 @@ func TestGroupLifecycleAndNames(t *testing.T) {
 }
 
 func TestGroupMembersAreSetAtomicallyAndFollowSecrets(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewGroupRepo(db)
 	secrets := storage.NewSecretRepo(db, make([]byte, crypto.KeySize))

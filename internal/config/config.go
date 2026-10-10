@@ -16,8 +16,8 @@ type Config struct {
 	// ListenAddr is the address the HTTP API/web server binds to.
 	ListenAddr string
 
-	// RqliteAddr is the base URL of the single-node rqlite instance.
-	RqliteAddr string
+	// DBPath is the SQLite database file.
+	DBPath string
 
 	// RootKeyPath is the path to the 0600 root encryption key file used to
 	// unseal the secret store on startup.
@@ -37,7 +37,7 @@ func Load() (Config, error) {
 	}
 	return Config{
 		ListenAddr:      getEnv("VOIDGRID_LISTEN_ADDR", ":8780"),
-		RqliteAddr:      getEnv("VOIDGRID_RQLITE_ADDR", "http://127.0.0.1:4001"),
+		DBPath:          getEnv("VOIDGRID_DB_PATH", "/data/voidgrid.db"),
 		RootKeyPath:     getEnv("VOIDGRID_ROOT_KEY_PATH", "/run/secrets/voidgrid-root-key"),
 		HTTPAllowedNets: nets,
 	}, nil

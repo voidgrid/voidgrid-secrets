@@ -2,10 +2,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
-
-	"github.com/rqlite/gorqlite"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
@@ -34,7 +33,7 @@ func (r *SessionRepo) Create(ctx context.Context, userID int64, ttl time.Duratio
 	hash := crypto.HashToken(plaintext)
 	expiresAt = time.Now().Add(ttl)
 
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
+	results, err := r.db.write(ctx, []Statement{
 		{
 			Query:     `INSERT INTO sessions (session_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
 			Arguments: []interface{}{hash, userID, formatTimestamp(expiresAt), nowTimestamp()},
@@ -56,7 +55,7 @@ func (r *SessionRepo) Create(ctx context.Context, userID int64, ttl time.Duratio
 func (r *SessionRepo) Authenticate(ctx context.Context, plaintext string) (model.User, error) {
 	hash := crypto.HashToken(plaintext)
 
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT s.user_id, s.expires_at, s.revoked_at, u.id, u.username, u.auth_method, u.created_at
 			FROM sessions s JOIN users u ON u.id = s.user_id
 			WHERE s.session_hash = ?`,
@@ -72,7 +71,7 @@ func (r *SessionRepo) Authenticate(ctx context.Context, plaintext string) (model
 	var (
 		userID       int64
 		expiresAtRaw string
-		revokedAt    gorqlite.NullString
+		revokedAt    sql.NullString
 		user         model.User
 		authMethod   string
 		createdAtRaw string
@@ -107,7 +106,7 @@ func (r *SessionRepo) Authenticate(ctx context.Context, plaintext string) (model
 func (r *SessionRepo) Revoke(ctx context.Context, plaintext string) error {
 	hash := crypto.HashToken(plaintext)
 
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
+	results, err := r.db.write(ctx, []Statement{
 		{
 			Query:     `UPDATE sessions SET revoked_at = ? WHERE session_hash = ? AND revoked_at IS NULL`,
 			Arguments: []interface{}{formatTimestamp(time.Now()), hash},
@@ -125,7 +124,7 @@ func (r *SessionRepo) Revoke(ctx context.Context, plaintext string) error {
 // RevokeAll ends every session of userID - used when the account is
 // recovered, so anyone holding an old session is signed out.
 func (r *SessionRepo) RevokeAll(ctx context.Context, userID int64) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query:     `UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
 		Arguments: []interface{}{nowTimestamp(), userID},
 	}})

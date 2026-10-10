@@ -8,8 +8,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/rqlite/gorqlite"
-
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
@@ -61,7 +59,7 @@ func (r *GroupRepo) Create(ctx context.Context, name string) (model.SecretGroup,
 	if err != nil {
 		return model.SecretGroup{}, err
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query:     `INSERT INTO secret_groups (name, created_at) VALUES (?, ?)`,
 		Arguments: []interface{}{name, nowTimestamp()},
 	}})
@@ -76,7 +74,7 @@ func (r *GroupRepo) Create(ctx context.Context, name string) (model.SecretGroup,
 
 // List returns every group with its members, ordered by name.
 func (r *GroupRepo) List(ctx context.Context) ([]model.SecretGroup, error) {
-	qr, err := r.db.conn.QueryOneContext(ctx, `SELECT id, name, created_at FROM secret_groups ORDER BY name COLLATE NOCASE`)
+	qr, err := r.db.queryString(ctx, `SELECT id, name, created_at FROM secret_groups ORDER BY name COLLATE NOCASE`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list groups: %w", err)
 	}
@@ -91,7 +89,7 @@ func (r *GroupRepo) List(ctx context.Context) ([]model.SecretGroup, error) {
 		groups = append(groups, g)
 	}
 
-	mr, err := r.db.conn.QueryOneContext(ctx, `SELECT group_id, secret_id FROM secret_group_members ORDER BY group_id, secret_id`)
+	mr, err := r.db.queryString(ctx, `SELECT group_id, secret_id FROM secret_group_members ORDER BY group_id, secret_id`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list group members: %w", err)
 	}
@@ -109,7 +107,7 @@ func (r *GroupRepo) List(ctx context.Context) ([]model.SecretGroup, error) {
 
 // Get returns one group with its members.
 func (r *GroupRepo) Get(ctx context.Context, id int64) (model.SecretGroup, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT id, name, created_at FROM secret_groups WHERE id = ?`, Arguments: []interface{}{id},
 	})
 	if err != nil {
@@ -122,7 +120,7 @@ func (r *GroupRepo) Get(ctx context.Context, id int64) (model.SecretGroup, error
 	if err != nil {
 		return model.SecretGroup{}, err
 	}
-	mr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	mr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT secret_id FROM secret_group_members WHERE group_id = ? ORDER BY secret_id`, Arguments: []interface{}{id},
 	})
 	if err != nil {
@@ -138,7 +136,7 @@ func (r *GroupRepo) Get(ctx context.Context, id int64) (model.SecretGroup, error
 	return g, nil
 }
 
-func scanGroup(qr gorqlite.QueryResult) (model.SecretGroup, error) {
+func scanGroup(qr *QueryResult) (model.SecretGroup, error) {
 	var (
 		g   model.SecretGroup
 		raw string
@@ -159,7 +157,7 @@ func (r *GroupRepo) Rename(ctx context.Context, id int64, name string) error {
 	if err != nil {
 		return err
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `UPDATE secret_groups SET name = ? WHERE id = ?`, Arguments: []interface{}{name, id},
 	}})
 	if err := writeErr("rename group", results, err); err != nil {
@@ -177,7 +175,7 @@ func (r *GroupRepo) Rename(ctx context.Context, id int64, name string) error {
 // Delete removes a group and its memberships. The secrets and every grant
 // are untouched.
 func (r *GroupRepo) Delete(ctx context.Context, id int64) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `DELETE FROM secret_groups WHERE id = ?`, Arguments: []interface{}{id},
 	}})
 	if err := writeErr("delete group", results, err); err != nil {
@@ -196,7 +194,7 @@ func (r *GroupRepo) SetMembers(ctx context.Context, id int64, secretIDs []int64)
 	if _, err := r.Get(ctx, id); err != nil {
 		return err
 	}
-	stmts := []gorqlite.ParameterizedStatement{{
+	stmts := []Statement{{
 		Query: `DELETE FROM secret_group_members WHERE group_id = ?`, Arguments: []interface{}{id},
 	}}
 	seen := map[int64]bool{}
@@ -205,11 +203,11 @@ func (r *GroupRepo) SetMembers(ctx context.Context, id int64, secretIDs []int64)
 			continue
 		}
 		seen[sid] = true
-		stmts = append(stmts, gorqlite.ParameterizedStatement{
+		stmts = append(stmts, Statement{
 			Query: `INSERT INTO secret_group_members (group_id, secret_id) VALUES (?, ?)`, Arguments: []interface{}{id, sid},
 		})
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, stmts)
+	results, err := r.db.write(ctx, stmts)
 	if err := writeErrAll("set group members", results, err); err != nil {
 		if strings.Contains(err.Error(), "FOREIGN KEY") {
 			return ErrSecretNotFound
@@ -221,7 +219,7 @@ func (r *GroupRepo) SetMembers(ctx context.Context, id int64, secretIDs []int64)
 
 // writeErrAll is writeErr for multi-statement writes: it reports the first
 // failing statement.
-func writeErrAll(what string, results []gorqlite.WriteResult, err error) error {
+func writeErrAll(what string, results []WriteResult, err error) error {
 	if err != nil {
 		return fmt.Errorf("storage: %s: %w", what, err)
 	}

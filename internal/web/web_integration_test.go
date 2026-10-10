@@ -2,12 +2,10 @@ package web_test
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +23,7 @@ import (
 	"github.com/voidgrid/voidgrid-secrets/internal/web"
 )
 
-// env is a full, real stack (rqlite + storage + web router) for exercising
+// env is a full, real stack (SQLite + storage + web router) for exercising
 // the UI end-to-end.
 type env struct {
 	handler    http.Handler
@@ -43,33 +41,7 @@ const testSetupToken = "vgs_setup_test" //nolint:gosec // fake test fixture, not
 func newEnv(t *testing.T) env {
 	t.Helper()
 
-	if _, err := exec.LookPath("rqlited"); err != nil {
-		t.Skip("rqlited not found in PATH; skipping integration test")
-	}
-
-	httpPort := freePort(t)
-	raftPort := freePort(t)
-	dataDir := t.TempDir()
-	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
-
-	cmd := exec.Command("rqlited", //nolint:gosec // fixed binary name + test-generated args
-		"-fk",
-		"-http-addr", httpAddr,
-		"-raft-addr", fmt.Sprintf("127.0.0.1:%d", raftPort),
-		dataDir,
-	)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start rqlited: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	})
-
-	baseURL := "http://" + httpAddr
-	waitForReady(t, baseURL)
-
-	db, err := storage.Open(baseURL)
+	db, err := storage.Open(filepath.Join(t.TempDir(), "voidgrid.db"))
 	if err != nil {
 		t.Fatalf("storage.Open: %v", err)
 	}
@@ -125,32 +97,6 @@ func newEnv(t *testing.T) env {
 	})
 
 	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo, tokens: tokenRepo, groups: groupRepo, audit: auditRepo}
-}
-
-func freePort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("find free port: %v", err)
-	}
-	defer func() { _ = l.Close() }()
-	return l.Addr().(*net.TCPAddr).Port
-}
-
-func waitForReady(t *testing.T, baseURL string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/readyz") //nolint:gosec // baseURL is test-local, not attacker-controlled
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("rqlited at %s did not become ready in time", baseURL)
 }
 
 func doForm(t *testing.T, handler http.Handler, path string, form url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {

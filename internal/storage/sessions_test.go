@@ -12,7 +12,7 @@ import (
 )
 
 func TestSessionRepoCreateAndAuthenticate(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	userRepo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 	sessionRepo := storage.NewSessionRepo(db)
 	ctx := context.Background()
@@ -40,7 +40,7 @@ func TestSessionRepoCreateAndAuthenticate(t *testing.T) {
 }
 
 func TestSessionRepoAuthenticateRejectsUnknownToken(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	sessionRepo := storage.NewSessionRepo(db)
 
 	_, err := sessionRepo.Authenticate(context.Background(), "vgs_sess_does-not-exist")
@@ -50,7 +50,7 @@ func TestSessionRepoAuthenticateRejectsUnknownToken(t *testing.T) {
 }
 
 func TestSessionRepoAuthenticateRejectsExpired(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	userRepo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 	sessionRepo := storage.NewSessionRepo(db)
 	ctx := context.Background()
@@ -72,7 +72,7 @@ func TestSessionRepoAuthenticateRejectsExpired(t *testing.T) {
 }
 
 func TestSessionRepoAuthenticateRejectsRevoked(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	userRepo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
 	sessionRepo := storage.NewSessionRepo(db)
 	ctx := context.Background()

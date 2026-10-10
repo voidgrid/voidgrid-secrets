@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Docker-first test: runs `go test -race ./...` in the Dockerfile's
-# `testenv` stage - the same Go + C toolchain + rqlited the image build's
-# test gate uses, so the database integration tests run here too. The
-# stage is built (and cached) from deploy/docker/Dockerfile on each run;
-# after the first build that's a cache hit.
+# `testenv` stage - the same Go + C toolchain (cgo, for -race) the image
+# build's test gate uses. The stage is built (and cached) from
+# deploy/docker/Dockerfile on each run; after the first build that's a
+# cache hit.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/_run.sh"

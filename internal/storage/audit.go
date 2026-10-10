@@ -2,12 +2,11 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/rqlite/gorqlite"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 )
@@ -47,7 +46,7 @@ func (r *AuditRepo) Log(ctx context.Context, e audit.Event) error {
 	if e.ResourceID != 0 {
 		resourceID = e.ResourceID
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
+	results, err := r.db.write(ctx, []Statement{
 		{
 			Query: `INSERT INTO audit_log (actor_type, actor_id, action, resource_type, resource_id, metadata, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -132,7 +131,7 @@ func (r *AuditRepo) List(ctx context.Context, f AuditFilter) ([]AuditEntry, erro
 	query += " ORDER BY a.id DESC LIMIT ?"
 	args = append(args, limit)
 
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{Query: query, Arguments: args})
+	qr, err := r.db.queryOne(ctx, Statement{Query: query, Arguments: args})
 	if err != nil {
 		return nil, fmt.Errorf("storage: list audit log: %w", err)
 	}
@@ -141,7 +140,7 @@ func (r *AuditRepo) List(ctx context.Context, f AuditFilter) ([]AuditEntry, erro
 		var (
 			e                       AuditEntry
 			atRaw, meta             string
-			actorName, resourceName gorqlite.NullString
+			actorName, resourceName sql.NullString
 		)
 		if err := qr.Scan(&e.ID, &atRaw, &e.ActorType, &e.ActorID, &e.Action, &e.ResourceType, &e.ResourceID, &meta, &actorName, &resourceName); err != nil {
 			return nil, fmt.Errorf("storage: scan audit entry: %w", err)
@@ -159,7 +158,7 @@ func (r *AuditRepo) List(ctx context.Context, f AuditFilter) ([]AuditEntry, erro
 
 // Prune deletes entries recorded before cutoff and returns how many.
 func (r *AuditRepo) Prune(ctx context.Context, cutoff time.Time) (int64, error) {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `DELETE FROM audit_log WHERE created_at < ?`, Arguments: []interface{}{formatTimestamp(cutoff)},
 	}})
 	if err := writeErr("prune audit log", results, err); err != nil {

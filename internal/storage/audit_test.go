@@ -26,7 +26,7 @@ func requestContext(t *testing.T) context.Context {
 }
 
 func TestAuditLogRecordsFiltersAndPages(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	secret, err := storage.NewSecretRepo(db, make([]byte, crypto.KeySize)).Create(ctx, "audited-secret", []byte("v"))
 	if err != nil {
@@ -81,13 +81,13 @@ func TestAuditLogRecordsFiltersAndPages(t *testing.T) {
 }
 
 func TestAuditPruneDeletesOnlyOldEntries(t *testing.T) {
-	db, baseURL := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewAuditRepo(db)
 	if err := repo.Log(ctx, audit.Event{Actor: audit.User(1), Action: audit.Login, ResourceType: "user"}); err != nil {
 		t.Fatal(err)
 	}
-	rawExec(t, baseURL, `INSERT INTO audit_log (actor_type, actor_id, action, resource_type, created_at)
+	rawExec(t, db, `INSERT INTO audit_log (actor_type, actor_id, action, resource_type, created_at)
 		VALUES ('user', 1, 'login', 'user', '2020-01-01T00:00:00.000Z')`)
 
 	n, err := repo.Prune(ctx, time.Now().Add(-14*24*time.Hour))

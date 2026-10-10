@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"github.com/rqlite/gorqlite"
 )
 
 // RecoveryCodeRepo provides access to the recovery_codes table: single-use
@@ -27,20 +25,20 @@ func NewRecoveryCodeRepo(db *DB) *RecoveryCodeRepo {
 // previously issued codes, since showing a new batch implies the old one
 // is no longer the one the user has saved.
 func (r *RecoveryCodeRepo) ReplaceForUser(ctx context.Context, userID int64, hashedCodes []string) error {
-	stmts := []gorqlite.ParameterizedStatement{
+	stmts := []Statement{
 		{
 			Query:     `DELETE FROM recovery_codes WHERE user_id = ?`,
 			Arguments: []interface{}{userID},
 		},
 	}
 	for _, h := range hashedCodes {
-		stmts = append(stmts, gorqlite.ParameterizedStatement{
+		stmts = append(stmts, Statement{
 			Query:     `INSERT INTO recovery_codes (user_id, code_hash, created_at) VALUES (?, ?, ?)`,
 			Arguments: []interface{}{userID, h, nowTimestamp()},
 		})
 	}
 
-	results, err := r.db.conn.WriteParameterizedContext(ctx, stmts)
+	results, err := r.db.write(ctx, stmts)
 	if err != nil {
 		return fmt.Errorf("storage: replace recovery codes for user %d: %w", userID, err)
 	}
@@ -58,7 +56,7 @@ func (r *RecoveryCodeRepo) ReplaceForUser(ctx context.Context, userID int64, has
 // pattern as UserRepo.ConsumeTOTPCode), so concurrent attempts with the
 // same code can't race past each other and each code works exactly once.
 func (r *RecoveryCodeRepo) Consume(ctx context.Context, userID int64, codeHash string) (ok bool, err error) {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
+	results, err := r.db.write(ctx, []Statement{
 		{
 			Query: `UPDATE recovery_codes SET used_at = ?
 				WHERE user_id = ? AND code_hash = ? AND used_at IS NULL`,

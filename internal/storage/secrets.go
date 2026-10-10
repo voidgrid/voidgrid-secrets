@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rqlite/gorqlite"
-
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
@@ -88,7 +86,7 @@ func (r *SecretRepo) open(id int64, enc sealed) ([]byte, error) {
 // is removed again.
 func (r *SecretRepo) Create(ctx context.Context, name string, value []byte) (model.Secret, error) {
 	now := nowTimestamp()
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `INSERT INTO secrets (name, wrapped_dek, dek_nonce, ciphertext, value_nonce, created_at, updated_at)
 			VALUES (?, '', '', '', '', ?, ?)`,
 		Arguments: []interface{}{name, now, now},
@@ -102,7 +100,7 @@ func (r *SecretRepo) Create(ctx context.Context, name string, value []byte) (mod
 	id := results[0].LastInsertID
 
 	if err := r.store(ctx, id, value, ""); err != nil {
-		_, _ = r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
+		_, _ = r.db.write(ctx, []Statement{
 			{Query: `DELETE FROM secrets WHERE id = ?`, Arguments: []interface{}{id}},
 		})
 		return model.Secret{}, err
@@ -131,7 +129,7 @@ func (r *SecretRepo) store(ctx context.Context, id int64, value []byte, updatedA
 		query = `UPDATE secrets SET wrapped_dek = ?, dek_nonce = ?, ciphertext = ?, value_nonce = ?, updated_at = ? WHERE id = ?`
 		args = []interface{}{sv.wrappedDEK, sv.dekNonce, sv.ciphertext, sv.valueNonce, updatedAt, id}
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{Query: query, Arguments: args}})
+	results, err := r.db.write(ctx, []Statement{{Query: query, Arguments: args}})
 	if err := writeErr("write secret", results, err); err != nil {
 		return err
 	}
@@ -145,7 +143,7 @@ func (r *SecretRepo) store(ctx context.Context, id int64, value []byte, updatedA
 // its name, so nothing is re-encrypted. Token grants that derive their
 // environment variable name from the secret's name follow the new name.
 func (r *SecretRepo) Rename(ctx context.Context, id int64, name string) (model.Secret, error) {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query:     `UPDATE secrets SET name = ?, updated_at = ? WHERE id = ?`,
 		Arguments: []interface{}{name, nowTimestamp(), id},
 	}})
@@ -164,7 +162,7 @@ func (r *SecretRepo) Rename(ctx context.Context, id int64, name string) (model.S
 // Delete removes a secret. Token grants on it go with it (foreign key
 // cascade).
 func (r *SecretRepo) Delete(ctx context.Context, id int64) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `DELETE FROM secrets WHERE id = ?`, Arguments: []interface{}{id},
 	}})
 	if err := writeErr("delete secret", results, err); err != nil {
@@ -178,7 +176,7 @@ func (r *SecretRepo) Delete(ctx context.Context, id int64) error {
 
 // Get returns a secret's metadata without decrypting its value.
 func (r *SecretRepo) Get(ctx context.Context, id int64) (model.Secret, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query:     `SELECT id, name, key_version, created_at, updated_at FROM secrets WHERE id = ?`,
 		Arguments: []interface{}{id},
 	})
@@ -193,7 +191,7 @@ func (r *SecretRepo) Get(ctx context.Context, id int64) (model.Secret, error) {
 
 // List returns every secret's metadata, ordered by name.
 func (r *SecretRepo) List(ctx context.Context) ([]model.Secret, error) {
-	qr, err := r.db.conn.QueryOneContext(ctx, `SELECT id, name, key_version, created_at, updated_at FROM secrets ORDER BY name`)
+	qr, err := r.db.queryString(ctx, `SELECT id, name, key_version, created_at, updated_at FROM secrets ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list secrets: %w", err)
 	}
@@ -210,7 +208,7 @@ func (r *SecretRepo) List(ctx context.Context) ([]model.Secret, error) {
 
 // Reveal decrypts and returns a secret's value. Callers audit it.
 func (r *SecretRepo) Reveal(ctx context.Context, id int64) ([]byte, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query:     `SELECT wrapped_dek, dek_nonce, ciphertext, value_nonce FROM secrets WHERE id = ?`,
 		Arguments: []interface{}{id},
 	})
@@ -227,7 +225,7 @@ func (r *SecretRepo) Reveal(ctx context.Context, id int64) ([]byte, error) {
 	return r.open(id, enc)
 }
 
-func scanSecret(qr gorqlite.QueryResult) (model.Secret, error) {
+func scanSecret(qr *QueryResult) (model.Secret, error) {
 	var (
 		s                  model.Secret
 		createdRaw, updRaw string
@@ -245,8 +243,8 @@ func scanSecret(qr gorqlite.QueryResult) (model.Secret, error) {
 	return s, nil
 }
 
-// writeErr folds a gorqlite write's two error channels into one.
-func writeErr(what string, results []gorqlite.WriteResult, err error) error {
+// writeErr folds a write's two error channels into one.
+func writeErr(what string, results []WriteResult, err error) error {
 	if err != nil {
 		return fmt.Errorf("storage: %s: %w", what, err)
 	}

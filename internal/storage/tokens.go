@@ -2,13 +2,12 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/rqlite/gorqlite"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/token"
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
@@ -46,7 +45,7 @@ func (r *TokenRepo) Create(ctx context.Context, description string, expiresAt *t
 	if err != nil {
 		return "", model.MachineToken{}, err
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query:     `INSERT INTO machine_tokens (token_hash, description, expires_at, created_at) VALUES (?, ?, ?, ?)`,
 		Arguments: []interface{}{crypto.HashToken(plaintext), description, timeOrNil(expiresAt), nowTimestamp()},
 	}})
@@ -64,7 +63,7 @@ func (r *TokenRepo) Create(ctx context.Context, description string, expiresAt *t
 // up the matching token, rejects it if revoked or expired, records
 // last_used_at, and returns the token's metadata and grants.
 func (r *TokenRepo) Authenticate(ctx context.Context, plaintext string) (model.MachineToken, []model.TokenGrant, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query:     `SELECT ` + tokenColumns + ` FROM machine_tokens WHERE token_hash = ?`,
 		Arguments: []interface{}{crypto.HashToken(plaintext)},
 	})
@@ -88,7 +87,7 @@ func (r *TokenRepo) Authenticate(ctx context.Context, plaintext string) (model.M
 	}
 
 	now := time.Now()
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `UPDATE machine_tokens SET last_used_at = ? WHERE id = ?`, Arguments: []interface{}{formatTimestamp(now), mt.ID},
 	}})
 	if err := writeErr("record token use", results, err); err != nil {
@@ -100,7 +99,7 @@ func (r *TokenRepo) Authenticate(ctx context.Context, plaintext string) (model.M
 
 // Revoke marks a token revoked; it can never authenticate again.
 func (r *TokenRepo) Revoke(ctx context.Context, id int64) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query:     `UPDATE machine_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
 		Arguments: []interface{}{nowTimestamp(), id},
 	}})
@@ -138,7 +137,7 @@ func (r *TokenRepo) AddGrant(ctx context.Context, tokenID, secretID int64, permi
 	if envName != "" {
 		stored = envName
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `INSERT INTO machine_token_grants (token_id, secret_id, permission, env_name)
 			SELECT ?, ?, ?, ?
 			WHERE EXISTS (SELECT 1 FROM machine_tokens WHERE id = ?) AND EXISTS (SELECT 1 FROM secrets WHERE id = ?)
@@ -251,7 +250,7 @@ func (r *TokenRepo) SetGrants(ctx context.Context, tokenID int64, specs []GrantS
 		}
 	}
 
-	stmts := []gorqlite.ParameterizedStatement{{
+	stmts := []Statement{{
 		Query: `DELETE FROM machine_token_grants WHERE token_id = ?`, Arguments: []interface{}{tokenID},
 	}}
 	for _, sid := range order {
@@ -260,12 +259,12 @@ func (r *TokenRepo) SetGrants(ctx context.Context, tokenID int64, specs []GrantS
 		if sp.EnvName != "" {
 			stored = sp.EnvName
 		}
-		stmts = append(stmts, gorqlite.ParameterizedStatement{
+		stmts = append(stmts, Statement{
 			Query:     `INSERT INTO machine_token_grants (token_id, secret_id, permission, env_name) VALUES (?, ?, ?, ?)`,
 			Arguments: []interface{}{tokenID, sid, sp.Permission, stored},
 		})
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, stmts)
+	results, err := r.db.write(ctx, stmts)
 	if err := writeErrAll("set grants", results, err); err != nil {
 		if strings.Contains(err.Error(), "FOREIGN KEY") {
 			return GrantChange{}, ErrNotFound
@@ -287,7 +286,7 @@ func (r *TokenRepo) secretNames(ctx context.Context, ids []int64) (map[int64]str
 	for i, id := range ids {
 		args[i], marks[i] = id, "?"
 	}
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT id, name FROM secrets WHERE id IN (` + strings.Join(marks, ",") + `)`, Arguments: args,
 	})
 	if err != nil {
@@ -312,7 +311,7 @@ func (r *TokenRepo) secretNames(ctx context.Context, ids []int64) (map[int64]str
 // GrantableTo returns the tokens that can still be given a grant on the
 // secret: not revoked, not expired, and without a grant on it already.
 func (r *TokenRepo) GrantableTo(ctx context.Context, secretID int64) ([]model.MachineToken, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT ` + tokenColumns + ` FROM machine_tokens t
 			WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
 			AND NOT EXISTS (SELECT 1 FROM machine_token_grants g WHERE g.token_id = t.id AND g.secret_id = ?)
@@ -336,7 +335,7 @@ func (r *TokenRepo) GrantableTo(ctx context.Context, secretID int64) ([]model.Ma
 // RemoveGrant takes away a token's grant on one secret. It returns
 // ErrNotFound if the token has no such grant.
 func (r *TokenRepo) RemoveGrant(ctx context.Context, tokenID, secretID int64) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query:     `DELETE FROM machine_token_grants WHERE token_id = ? AND secret_id = ?`,
 		Arguments: []interface{}{tokenID, secretID},
 	}})
@@ -351,7 +350,7 @@ func (r *TokenRepo) RemoveGrant(ctx context.Context, tokenID, secretID int64) er
 
 // List returns every machine token, newest first.
 func (r *TokenRepo) List(ctx context.Context) ([]model.MachineToken, error) {
-	qr, err := r.db.conn.QueryOneContext(ctx, `SELECT `+tokenColumns+` FROM machine_tokens ORDER BY id DESC`)
+	qr, err := r.db.queryString(ctx, `SELECT `+tokenColumns+` FROM machine_tokens ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list tokens: %w", err)
 	}
@@ -368,7 +367,7 @@ func (r *TokenRepo) List(ctx context.Context) ([]model.MachineToken, error) {
 
 // Get returns one token's metadata.
 func (r *TokenRepo) Get(ctx context.Context, id int64) (model.MachineToken, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT ` + tokenColumns + ` FROM machine_tokens WHERE id = ?`, Arguments: []interface{}{id},
 	})
 	if err != nil {
@@ -382,7 +381,7 @@ func (r *TokenRepo) Get(ctx context.Context, id int64) (model.MachineToken, erro
 
 // ListGrants returns every grant on a token, with the secret's name.
 func (r *TokenRepo) ListGrants(ctx context.Context, tokenID int64) ([]model.TokenGrant, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT g.token_id, g.secret_id, s.name, g.permission, g.env_name
 			FROM machine_token_grants g JOIN secrets s ON s.id = g.secret_id
 			WHERE g.token_id = ? ORDER BY s.name`,
@@ -395,7 +394,7 @@ func (r *TokenRepo) ListGrants(ctx context.Context, tokenID int64) ([]model.Toke
 	for qr.Next() {
 		var (
 			g       model.TokenGrant
-			envName gorqlite.NullString
+			envName sql.NullString
 		)
 		if err := qr.Scan(&g.TokenID, &g.SecretID, &g.SecretName, &g.Permission, &envName); err != nil {
 			return nil, fmt.Errorf("storage: scan grant: %w", err)
@@ -410,7 +409,7 @@ func (r *TokenRepo) ListGrants(ctx context.Context, tokenID int64) ([]model.Toke
 // variable name (explicit, or derived from the secret's current name) and
 // when the secret's value last changed.
 func (r *TokenRepo) EnvGrants(ctx context.Context, tokenID int64) ([]model.EnvGrant, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT s.id, s.name, g.env_name, g.permission, s.updated_at
 			FROM machine_token_grants g JOIN secrets s ON s.id = g.secret_id
 			WHERE g.token_id = ? ORDER BY s.id`,
@@ -423,7 +422,7 @@ func (r *TokenRepo) EnvGrants(ctx context.Context, tokenID int64) ([]model.EnvGr
 	for qr.Next() {
 		var (
 			g          model.EnvGrant
-			envName    gorqlite.NullString
+			envName    sql.NullString
 			updatedRaw string
 		)
 		if err := qr.Scan(&g.SecretID, &g.SecretName, &envName, &g.Permission, &updatedRaw); err != nil {
@@ -442,7 +441,7 @@ func (r *TokenRepo) EnvGrants(ctx context.Context, tokenID int64) ([]model.EnvGr
 }
 
 func (r *TokenRepo) secretName(ctx context.Context, secretID int64) (string, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT name FROM secrets WHERE id = ?`, Arguments: []interface{}{secretID},
 	})
 	if err != nil {
@@ -458,11 +457,11 @@ func (r *TokenRepo) secretName(ctx context.Context, secretID int64) (string, err
 	return name, nil
 }
 
-func scanMachineToken(qr gorqlite.QueryResult) (model.MachineToken, error) {
+func scanMachineToken(qr *QueryResult) (model.MachineToken, error) {
 	var (
 		mt                               model.MachineToken
 		createdAtRaw                     string
-		expiresAt, revokedAt, lastUsedAt gorqlite.NullString
+		expiresAt, revokedAt, lastUsedAt sql.NullString
 	)
 	if err := qr.Scan(&mt.ID, &mt.Description, &createdAtRaw, &expiresAt, &revokedAt, &lastUsedAt); err != nil {
 		return model.MachineToken{}, fmt.Errorf("storage: scan token: %w", err)

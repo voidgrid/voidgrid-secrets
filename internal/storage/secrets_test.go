@@ -10,7 +10,7 @@ import (
 )
 
 func TestSecretLifecycle(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewSecretRepo(db, make([]byte, crypto.KeySize))
 
@@ -65,7 +65,7 @@ func TestSecretLifecycle(t *testing.T) {
 }
 
 func TestSecretRevealFailsWithWrongRootKey(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	key := make([]byte, crypto.KeySize)
 	s, err := storage.NewSecretRepo(db, key).Create(ctx, "s", []byte("value"))
@@ -82,7 +82,7 @@ func TestSecretRevealFailsWithWrongRootKey(t *testing.T) {
 // Someone with database write access (but not the root key) copies one
 // secret's encrypted columns onto another: it must not decrypt there.
 func TestSecretEncryptionIsBoundToItsRow(t *testing.T) {
-	db, baseURL := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewSecretRepo(db, make([]byte, crypto.KeySize))
 	a, err := repo.Create(ctx, "a", []byte("value-a"))
@@ -93,7 +93,7 @@ func TestSecretEncryptionIsBoundToItsRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawExec(t, baseURL, `UPDATE secrets SET
+	rawExec(t, db, `UPDATE secrets SET
 		wrapped_dek = (SELECT wrapped_dek FROM secrets WHERE id = ?),
 		dek_nonce = (SELECT dek_nonce FROM secrets WHERE id = ?),
 		ciphertext = (SELECT ciphertext FROM secrets WHERE id = ?),

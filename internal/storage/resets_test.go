@@ -10,7 +10,7 @@ import (
 )
 
 func TestBreakGlassCodeWorksOnceAndExpires(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewResetRepo(db, make([]byte, crypto.KeySize))
 	soon := time.Now().Add(time.Minute)
@@ -37,7 +37,7 @@ func TestBreakGlassCodeWorksOnceAndExpires(t *testing.T) {
 }
 
 func TestResetCarriesPendingTOTPAndFinishesOnce(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewResetRepo(db, make([]byte, crypto.KeySize))
 

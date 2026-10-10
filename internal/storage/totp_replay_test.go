@@ -9,10 +9,10 @@ import (
 )
 
 func TestUserRepoConsumeTOTPCodeRejectsReplay(t *testing.T) {
-	db, baseURL := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewUserRepo(db, make([]byte, crypto.KeySize))
-	userID := insertTestUser(t, baseURL, "totp-replay-user")
+	userID := insertTestUser(t, db, "totp-replay-user")
 
 	ok, err := repo.ConsumeTOTPCode(ctx, userID, "123456")
 	if err != nil {

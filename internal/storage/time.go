@@ -31,10 +31,9 @@ func formatTimestamp(t time.Time) string {
 }
 
 // nowTimestamp is the current time, formatted for storage. Every INSERT
-// passes its timestamps explicitly with this rather than relying on the
-// migrations' strftime('now') column defaults: rqlite rewrites 'now' into
-// a fixed value when it executes a statement, including the CREATE TABLE,
-// so those defaults are frozen at the moment each table was created.
+// passes its timestamps explicitly with this rather than relying on column
+// defaults, so every row uses the one fixed format (databases carried over
+// from the old rqlite store still have frozen defaults in their schema).
 func nowTimestamp() string {
 	return formatTimestamp(time.Now())
 }

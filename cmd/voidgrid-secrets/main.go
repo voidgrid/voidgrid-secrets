@@ -19,6 +19,8 @@ func main() {
 		err = runInject(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "agent":
 		err = runAgent(os.Args[2:])
+	case len(os.Args) > 1 && os.Args[1] == "backup":
+		err = runBackup(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "recover":
 		err = runRecover(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "version":

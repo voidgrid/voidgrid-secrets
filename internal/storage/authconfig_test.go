@@ -10,7 +10,7 @@ import (
 )
 
 func TestPasswordSetupCompletes(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewAuthConfigRepo(db, make([]byte, crypto.KeySize))
 
@@ -29,7 +29,7 @@ func TestPasswordSetupCompletes(t *testing.T) {
 // OIDC setup is pending until the operator signs in; the client secret is
 // stored encrypted and read back intact.
 func TestOIDCSetupIsPendingUntilCompleted(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	ctx := context.Background()
 	repo := storage.NewAuthConfigRepo(db, make([]byte, crypto.KeySize))
 

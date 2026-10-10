@@ -30,9 +30,12 @@ func runRecover(args []string) error {
 	if err != nil {
 		return fmt.Errorf("recover: load root key: %w", err)
 	}
-	db, err := storage.Open(cfg.RqliteAddr)
+	if err := storage.CheckLegacy(cfg.DBPath); err != nil {
+		return fmt.Errorf("recover: %w", err)
+	}
+	db, err := storage.Open(cfg.DBPath)
 	if err != nil {
-		return fmt.Errorf("recover: connect to rqlite: %w", err)
+		return fmt.Errorf("recover: open database: %w", err)
 	}
 	defer db.Close()
 

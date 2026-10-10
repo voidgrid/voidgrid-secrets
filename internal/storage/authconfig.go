@@ -2,9 +2,8 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-
-	"github.com/rqlite/gorqlite"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
@@ -27,7 +26,7 @@ func NewAuthConfigRepo(db *DB, rootKey []byte) *AuthConfigRepo {
 
 // IsComplete reports whether setup has finished.
 func (r *AuthConfigRepo) IsComplete(ctx context.Context) (bool, error) {
-	qr, err := r.db.conn.QueryOneContext(ctx, "SELECT COUNT(*) FROM auth_config WHERE id = 1 AND completed_at IS NOT NULL")
+	qr, err := r.db.queryString(ctx, "SELECT COUNT(*) FROM auth_config WHERE id = 1 AND completed_at IS NOT NULL")
 	if err != nil {
 		return false, fmt.Errorf("storage: check setup completion: %w", err)
 	}
@@ -43,7 +42,7 @@ func (r *AuthConfigRepo) IsComplete(ctx context.Context) (bool, error) {
 
 // CompletePasswordTOTP finishes setup with the password+TOTP method.
 func (r *AuthConfigRepo) CompletePasswordTOTP(ctx context.Context) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `INSERT INTO auth_config (id, auth_method, completed_at) VALUES (1, 'password_totp', ?)
 			ON CONFLICT (id) DO UPDATE SET auth_method = 'password_totp', oidc_issuer = NULL, oidc_client_id = NULL,
 				oidc_client_secret_enc = NULL, oidc_client_secret_nonce = NULL, oidc_redirect_uri = NULL,
@@ -63,7 +62,7 @@ func (r *AuthConfigRepo) SaveOIDC(ctx context.Context, issuer, clientID, clientS
 	if err != nil {
 		return fmt.Errorf("storage: encrypt OIDC client secret: %w", err)
 	}
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query: `INSERT INTO auth_config
 				(id, auth_method, oidc_issuer, oidc_client_id, oidc_client_secret_enc, oidc_client_secret_nonce, oidc_redirect_uri)
 				VALUES (1, 'oidc', ?, ?, ?, ?, ?)
@@ -78,7 +77,7 @@ func (r *AuthConfigRepo) SaveOIDC(ctx context.Context, issuer, clientID, clientS
 
 // CompleteOIDC finishes an OIDC setup saved by SaveOIDC.
 func (r *AuthConfigRepo) CompleteOIDC(ctx context.Context) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{
+	results, err := r.db.write(ctx, []Statement{{
 		Query:     `UPDATE auth_config SET completed_at = ? WHERE id = 1 AND auth_method = 'oidc' AND completed_at IS NULL`,
 		Arguments: []interface{}{nowTimestamp()},
 	}})
@@ -94,7 +93,7 @@ func (r *AuthConfigRepo) CompleteOIDC(ctx context.Context) error {
 // Get returns the stored auth configuration, complete or pending, or
 // ErrNotFound if setup hasn't stored any.
 func (r *AuthConfigRepo) Get(ctx context.Context) (model.AuthConfig, error) {
-	qr, err := r.db.conn.QueryOneContext(ctx,
+	qr, err := r.db.queryString(ctx,
 		`SELECT auth_method, oidc_issuer, oidc_client_id, oidc_client_secret_enc, oidc_client_secret_nonce, oidc_redirect_uri, completed_at
 			FROM auth_config WHERE id = 1`)
 	if err != nil {
@@ -107,8 +106,8 @@ func (r *AuthConfigRepo) Get(ctx context.Context) (model.AuthConfig, error) {
 	var (
 		cfg                                      model.AuthConfig
 		authMethod                               string
-		issuer, clientID, secretEnc, secretNonce gorqlite.NullString
-		redirectURI, completedAt                 gorqlite.NullString
+		issuer, clientID, secretEnc, secretNonce sql.NullString
+		redirectURI, completedAt                 sql.NullString
 	)
 	if err := qr.Scan(&authMethod, &issuer, &clientID, &secretEnc, &secretNonce, &redirectURI, &completedAt); err != nil {
 		return model.AuthConfig{}, fmt.Errorf("storage: scan auth config: %w", err)

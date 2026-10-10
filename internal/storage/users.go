@@ -2,10 +2,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-
-	"github.com/rqlite/gorqlite"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
@@ -116,7 +115,7 @@ func (r *UserRepo) SetPassword(ctx context.Context, passwordHash string) error {
 // ~90s), so without this a code captured in transit could be replayed
 // within that window. The check and the record are one atomic UPDATE.
 func (r *UserRepo) ConsumeTOTPCode(ctx context.Context, userID int64, code string) (ok bool, err error) {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{
+	results, err := r.db.write(ctx, []Statement{
 		{
 			Query: `UPDATE users SET totp_last_code = ?
 				WHERE id = ? AND (totp_last_code IS NULL OR totp_last_code != ?)`,
@@ -149,7 +148,7 @@ func (r *UserRepo) GetAuthRecord(ctx context.Context, username string) (model.Us
 // including the decrypted TOTP secret (empty before enrollment), or
 // ErrUserNotFound if it doesn't exist yet.
 func (r *UserRepo) AuthRecord(ctx context.Context) (model.UserAuthRecord, error) {
-	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+	qr, err := r.db.queryOne(ctx, Statement{
 		Query: `SELECT id, username, auth_method, created_at, password_hash, totp_secret_enc, totp_secret_nonce, oidc_subject
 			FROM users WHERE id = ?`,
 		Arguments: []interface{}{AccountID},
@@ -165,10 +164,10 @@ func (r *UserRepo) AuthRecord(ctx context.Context) (model.UserAuthRecord, error)
 		rec             model.UserAuthRecord
 		authMethod      string
 		createdAtRaw    string
-		passwordHash    gorqlite.NullString
-		totpSecretEnc   gorqlite.NullString
-		totpSecretNonce gorqlite.NullString
-		oidcSubject     gorqlite.NullString
+		passwordHash    sql.NullString
+		totpSecretEnc   sql.NullString
+		totpSecretNonce sql.NullString
+		oidcSubject     sql.NullString
 	)
 	if err := qr.Scan(&rec.ID, &rec.Username, &authMethod, &createdAtRaw, &passwordHash, &totpSecretEnc, &totpSecretNonce, &oidcSubject); err != nil {
 		return model.UserAuthRecord{}, fmt.Errorf("storage: scan account: %w", err)
@@ -200,7 +199,7 @@ func (r *UserRepo) AuthRecord(ctx context.Context) (model.UserAuthRecord, error)
 
 // write runs one parameterized statement, wrapping any error with what.
 func (r *UserRepo) write(ctx context.Context, what, query string, args ...interface{}) error {
-	results, err := r.db.conn.WriteParameterizedContext(ctx, []gorqlite.ParameterizedStatement{{Query: query, Arguments: args}})
+	results, err := r.db.write(ctx, []Statement{{Query: query, Arguments: args}})
 	if err != nil {
 		return fmt.Errorf("storage: %s: %w", what, err)
 	}

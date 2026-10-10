@@ -9,7 +9,7 @@ import (
 )
 
 func TestRecoveryCodeRepoConsumeIsSingleUse(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	rootKey := make([]byte, crypto.KeySize)
 	users := storage.NewUserRepo(db, rootKey)
 	codes := storage.NewRecoveryCodeRepo(db)
@@ -43,7 +43,7 @@ func TestRecoveryCodeRepoConsumeIsSingleUse(t *testing.T) {
 }
 
 func TestRecoveryCodeRepoReplaceForUserInvalidatesOldCodes(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	rootKey := make([]byte, crypto.KeySize)
 	users := storage.NewUserRepo(db, rootKey)
 	codes := storage.NewRecoveryCodeRepo(db)
@@ -73,7 +73,7 @@ func TestRecoveryCodeRepoReplaceForUserInvalidatesOldCodes(t *testing.T) {
 }
 
 func TestRecoveryCodeRepoConsumeRejectsUnknownCode(t *testing.T) {
-	db, _ := newTestDB(t)
+	db := newTestDB(t)
 	rootKey := make([]byte, crypto.KeySize)
 	users := storage.NewUserRepo(db, rootKey)
 	codes := storage.NewRecoveryCodeRepo(db)
