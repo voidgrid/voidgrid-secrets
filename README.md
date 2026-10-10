@@ -98,13 +98,12 @@ script under `scripts/`:
 | `make live-test` | Live tests against a real OIDC provider (`scripts/live-test.sh`) |
 | `make run` | Builds, then runs the binary directly |
 | `make docker-build` | Builds the full container image |
-| `make dev` | Local rqlite + app dev loop (`scripts/dev.sh`) |
+| `make dev` | Local app dev loop against a SQLite file (`scripts/dev.sh`) |
 
 Tests gate the image: the Dockerfile's build stage runs `go vet` and
-`go test -race` against a real `rqlited`, so a failing test fails the
+`go test -race` against real SQLite databases, so a failing test fails the
 build. `make test` runs the same suite in the same toolchain (the
-Dockerfile's `testenv` stage, built and cached on first use), including
-the database integration tests.
+Dockerfile's `testenv` stage, built and cached on first use).
 
 `make live-test` reads its settings from a `.env` at the repo root - copy
 `env.example` and fill it in. It errors if `.env` is missing and skips if

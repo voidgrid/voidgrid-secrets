@@ -71,11 +71,11 @@ needs only access to the container.
 
 ## The server container
 
-### It is up but not answering (stays `starting`, then `unhealthy`)
+### It exits or keeps restarting
 
-The container does not exit when the app can't start - it keeps retrying, so
-a restart policy never kicks in. Read the log and look for the same line
-repeating:
+If the app can't start it exits with code 1, and a restart policy such as
+`restart: unless-stopped` then restarts it in a loop (`docker ps` shows
+`Restarting`). The last line of the log is the cause:
 
 ```
 docker compose logs voidgrid-secrets
@@ -89,18 +89,28 @@ docker compose logs voidgrid-secrets
 - **`crypto: root key file must not be group- or other-accessible (expected mode
   0600)`** - fix the file's mode (`chmod 600`), and make sure UID 1000 can read
   it.
-- **Something else:** the first error line in the log is the cause. The
-  `wget: server returned error: HTTP/1.1 503` lines are only the start-up
-  readiness check waiting, not the cause.
+- **`open database ...: attempt to write a readonly database ... must be
+  writable by this user`** - UID 1000 can't write to `/data`. SQLite creates
+  its `-wal` and `-shm` files beside the database, so the directory as well as
+  the file must belong to UID 1000. This happens when a volume was filled
+  through another container (a restore, for example); fix it with `chown
+  1000:1000` on the directory and `voidgrid.db`, as in the restore command in
+  [deployment.md](deployment.md#backup-and-restore).
+- **`found an old rqlite data directory ... but no database`** - you
+  upgraded from `v0.1.0-beta.5` or earlier without exporting your data. Nothing
+  is lost; follow [Moving from rqlite](deployment.md#moving-from-rqlite).
+- **`DATABASE PROBLEM: ...`** near the top of the log - SQLite reported a
+  problem with the file or its relationships; restore from a backup.
 - **The key was lost or replaced:** every stored secret is unrecoverable
   without the key it was encrypted under. Restore the key volume from a
-  backup taken together with the data volume
+  backup taken together with the database
   ([deployment.md](deployment.md#backup-and-restore)).
 
 ### `unhealthy` in `docker ps`
 
 The healthcheck asks the app for `/api/v1/setup/status` every 30 seconds, so
-`unhealthy` means the app isn't answering: use the section above.
+`unhealthy` means the app is running but not answering. Check the log; if it
+shows nothing, restart the container and report it.
 
 ### After upgrading from v0.1.0-beta.1 nothing answers on 8443
 

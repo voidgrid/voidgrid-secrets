@@ -1,12 +1,15 @@
 # Deployment
 
 voidgrid-secrets ships as one container image,
-`ghcr.io/voidgrid/voidgrid-secrets`. It runs the app and a single-node
-rqlite database together under s6-overlay. The image is x86_64 only for
-now. Pin a specific version tag for anything you rely on.
+`ghcr.io/voidgrid/voidgrid-secrets`. It runs one process, the app, which
+keeps everything in a single SQLite file (`/data/voidgrid.db`). The image is
+x86_64 only for now. Pin a specific version tag for anything you rely on.
 
-The container runs unprivileged, as UID/GID 1000 - every process,
-including the s6 supervisor. Nothing in it needs root.
+The container runs unprivileged, as UID/GID 1000. Nothing in it needs root.
+
+Coming from `v0.1.0-beta.5` or earlier, which used an embedded rqlite
+database? Do the one-time export in [Moving from rqlite](#moving-from-rqlite)
+before upgrading.
 
 Something not working? See [troubleshooting.md](troubleshooting.md).
 
@@ -49,7 +52,7 @@ Or:
 docker run -d --name voidgrid-secrets --user 1000:1000 -p 8780:8780 -v voidgrid-data:/data -v voidgrid-root-key:/run/secrets ghcr.io/voidgrid/voidgrid-secrets:beta
 ```
 
-`/data` holds rqlite's database; `/run/secrets` holds the root key. Back
+`/data` holds the SQLite database; `/run/secrets` holds the root key. Back
 up both volumes.
 
 ## 3. HTTPS, or a trusted network
@@ -125,41 +128,91 @@ one-time code - see [authentication.md](authentication.md#recovery).
 
 ## Backup and restore
 
-The database lives in the data volume and is encrypted with the key in the
-root-key volume. **Back up both together, from the same moment**: a
-database is useless without the key it was written under.
+The database is one SQLite file, `/data/voidgrid.db`, with every secret
+encrypted inside it by the key in the root-key volume. **Back up both from
+the same moment**: a database is useless without the key it was written
+under.
 
-Pause the container so nothing is writing, copy both volumes, and resume.
-First find the real volume names (compose prefixes them with the project
-name):
+**The database** - a consistent copy while the server keeps running, no
+pause needed:
+
+```
+docker compose exec -T voidgrid-secrets voidgrid-secrets backup > voidgrid.db
+```
+
+`-T` is needed: `docker compose exec` otherwise allocates a terminal, and
+the command refuses to write a database to a terminal. Don't copy `/data/voidgrid.db` out of a running container by hand - a live
+SQLite file is not safe to copy that way.
+
+**The root key** - copy its volume. Find the real volume names first
+(compose prefixes them with the project name):
 
 ```
 docker volume ls | grep voidgrid
 ```
 
-Then, substituting those names:
+Then, substituting the key volume's name:
 
 ```
-docker compose pause voidgrid-secrets; docker run --rm -v DATA_VOLUME:/v:ro -v "$PWD":/backup alpine tar czf /backup/voidgrid-data.tgz -C /v .; docker run --rm -v KEY_VOLUME:/v:ro -v "$PWD":/backup alpine tar czf /backup/voidgrid-root-key.tgz -C /v .; docker compose unpause voidgrid-secrets
+docker run --rm -v KEY_VOLUME:/v:ro -v "$PWD":/backup alpine tar czf /backup/voidgrid-root-key.tgz -C /v .
 ```
 
-(`docker compose stop` / `start` works the same way if you prefer a full
-stop.) The key archive is as sensitive as the secrets themselves: keep it
-somewhere you trust, and consider storing it apart from the data archive.
+The key archive is as sensitive as the secrets themselves: keep it somewhere
+you trust, and consider storing it apart from the database copy.
 
-To restore, stop the container, empty and refill both volumes, and start
-it:
+**Restore** - stop the server, put the database file back, restore the key,
+start:
 
 ```
-docker compose stop voidgrid-secrets; docker run --rm -v DATA_VOLUME:/v -v "$PWD":/backup alpine sh -c 'rm -rf /v/* /v/.[!.]* ; tar xzf /backup/voidgrid-data.tgz -C /v'; docker run --rm -v KEY_VOLUME:/v -v "$PWD":/backup alpine sh -c 'rm -rf /v/* /v/.[!.]* ; tar xzf /backup/voidgrid-root-key.tgz -C /v'; docker compose start voidgrid-secrets
+docker compose stop voidgrid-secrets; docker run --rm -v DATA_VOLUME:/d -v "$PWD":/backup alpine sh -c 'rm -f /d/voidgrid.db /d/voidgrid.db-wal /d/voidgrid.db-shm; cp /backup/voidgrid.db /d/voidgrid.db; chown 1000:1000 /d /d/voidgrid.db; chmod 600 /d/voidgrid.db'
 ```
 
-This deletes what is currently in those volumes, so only run it when you
-mean to replace them. Restore the data and the key from the same backup.
+```
+docker run --rm -v KEY_VOLUME:/v -v "$PWD":/backup alpine sh -c 'rm -rf /v/* /v/.[!.]* ; tar xzf /backup/voidgrid-root-key.tgz -C /v'; docker compose start voidgrid-secrets
+```
+
+The `chown` covers the directory as well as the file: SQLite creates its
+`-wal` and `-shm` files next to the database, so UID 1000 must be able to
+write there. This replaces what is currently in those volumes, so only run
+it when you mean to. Restore the database and the key from the same backup.
+
+## Moving from rqlite
+
+Up to `v0.1.0-beta.5` the data lived in an embedded rqlite database.
+Newer releases use one SQLite file instead. rqlite's own database is a
+SQLite file and can hand it over, so the move is an export on your running
+old container, then an upgrade:
+
+1. **Copy both volumes first**, in case you want to go back (with the old
+   container stopped, for example `tar` each volume as in the old backup
+   instructions).
+2. **Export**, still on the old image:
+
+   ```
+   docker compose exec voidgrid-secrets wget -qO /data/voidgrid.db http://127.0.0.1:4001/db/backup
+   ```
+3. **Upgrade**:
+
+   ```
+   docker compose pull voidgrid-secrets; docker compose up -d voidgrid-secrets
+   ```
+4. **Check** that you can sign in and that your tokens still work. Then
+   optionally reclaim the old store:
+
+   ```
+   docker compose exec voidgrid-secrets rm -rf /data/rqlite
+   ```
+
+If you upgrade without exporting, the new version refuses to start and
+tells you so - it will not create an empty database next to your old data.
+Nothing is lost; go back to step 2 with the old image. `VOIDGRID_RQLITE_ADDR`
+and `RQLITE_DATA_DIR` no longer exist; drop them from your compose file if
+you set them.
 
 ## Upgrading
 
-1. Back up (above).
+1. Back up (above). Coming from `v0.1.0-beta.5` or earlier? Follow
+   [Moving from rqlite](#moving-from-rqlite) instead - it is a one-time step.
 2. Change the image tag in your compose file (or keep `:beta`), then:
 
 ```
@@ -178,14 +231,15 @@ proxy, and `VOIDGRID_URL` in consumers.
 ## Health
 
 The image has a built-in healthcheck: it asks the app for
-`/api/v1/setup/status`, which only answers once the app and its database
-are both up. `docker ps` shows `healthy`, and other services can wait for
+`/api/v1/setup/status`, which only answers once the app has opened and
+migrated its database. `docker ps` shows `healthy`, and other services can wait for
 it with `depends_on: voidgrid-secrets: condition: service_healthy`.
 
 ## Restarting
 
 The container restarts fully unattended: the root key comes from its
-volume and the database persists on its own. If OIDC is configured and the
+volume and the database persists in its volume. `docker stop` shuts the app
+down cleanly, so its write-ahead log is folded into the database file. If OIDC is configured and the
 identity provider is unreachable when the container starts, the service
 still starts; OIDC sign-in stays unavailable until the next restart with
 the provider reachable, and recovery-code login keeps working meanwhile.
@@ -198,10 +252,9 @@ them. `VOIDGRID_HTTP_ALLOWED_NETS` is yours to set.
 | Variable | Default in the image | Purpose |
 |---|---|---|
 | `VOIDGRID_LISTEN_ADDR` | `0.0.0.0:8780` | Address the API + web UI bind to |
-| `VOIDGRID_RQLITE_ADDR` | `http://127.0.0.1:4001` | rqlite HTTP API (internal, same container) |
+| `VOIDGRID_DB_PATH` | `/data/voidgrid.db` | The SQLite database file |
 | `VOIDGRID_ROOT_KEY_PATH` | `/run/secrets/voidgrid-root-key` | Root encryption key file |
 | `VOIDGRID_HTTP_ALLOWED_NETS` | empty | Comma-separated CIDRs allowed to sign in over plain HTTP; see [section 3](#3-https-or-a-trusted-network) |
-| `RQLITE_DATA_DIR` | `/data/rqlite` | rqlite's on-disk data directory |
 
 ## Using secrets from other containers
 
