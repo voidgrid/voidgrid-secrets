@@ -124,6 +124,20 @@ button:hover, input[type="submit"]:hover {
     display: inline;
 }
 
+form.editor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+label.check {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    margin-right: 1.5rem;
+}
+
 .secret-value {
     background: var(--error-bg);
     border: 1px solid var(--error);

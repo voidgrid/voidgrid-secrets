@@ -37,6 +37,40 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+// Group quick-select on the token editor: ticking a group ticks its
+// secrets, and a group shows ticked when all its secrets are (partly
+// ticked when only some are). The server only ever receives the secrets.
+function syncGroups() {
+  document.querySelectorAll("[data-group-members]").forEach((box) => {
+    const ids = box.dataset.groupMembers.split(",").filter(Boolean);
+    const ticks = ids.map((id) => {
+      const secret = document.querySelector('[data-secret="' + id + '"]');
+      return secret ? secret.checked : false;
+    });
+    const on = ticks.filter(Boolean).length;
+    box.checked = ids.length > 0 && on === ids.length;
+    box.indeterminate = on > 0 && on < ids.length;
+  });
+}
+
+document.addEventListener("change", (event) => {
+  const box = event.target;
+  if (box.matches("[data-group-members]")) {
+    box.dataset.groupMembers.split(",").filter(Boolean).forEach((id) => {
+      const secret = document.querySelector('[data-secret="' + id + '"]');
+      if (secret) {
+        secret.checked = box.checked;
+      }
+    });
+    box.indeterminate = false;
+  }
+  if (box.matches("[data-secret], [data-group-members]")) {
+    syncGroups();
+  }
+});
+
+document.addEventListener("DOMContentLoaded", syncGroups);
+
 document.addEventListener("submit", (event) => {
   const message = event.target.dataset.confirm;
   if (message && !window.confirm(message)) {

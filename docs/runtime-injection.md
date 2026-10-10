@@ -23,15 +23,14 @@ values.
 
 ## 1. Create a token and grant it secrets
 
-In the web UI, go to tokens, create a token for the service (it's
-shown once), then open it (the link under the new token, or click its id
-or description in the list) and grant it **read** on each secret that
-service needs. A token starts with no grants, and a token with none
-reads nothing. Each
-grant has an environment variable name: set one explicitly (e.g.
-`POSTGRES_PASSWORD`) or leave it blank to derive it from the secret's name
-(`db-password` becomes `DB_PASSWORD`). A token can't have two secrets
-under the same name. The token's page lists every name it exposes.
+In the web UI, go to tokens, create a token for the service (it's shown
+once), then open it (the link under the new token, or click its id or
+description in the list) and tick each secret that service needs. A token
+starts with no grants, and a token with none reads nothing. Each grant has
+an environment variable name: set one explicitly (e.g. `POSTGRES_PASSWORD`)
+or leave it blank to derive it from the secret's name (`db-password`
+becomes `DB_PASSWORD`). A token can't have two secrets under the same name.
+The token's page lists every name it exposes.
 
 Give each service its own token, scoped to just its secrets.
 

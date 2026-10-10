@@ -3,6 +3,7 @@ package storage_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -199,5 +200,116 @@ func TestRemoveGrantTakesOnlyThatGrant(t *testing.T) {
 	}
 	if err := repo.RemoveGrant(ctx, 9999, keep.ID); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("unknown token = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSetGrantsReplacesTheWholeSetAtomically(t *testing.T) {
+	db, _ := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewTokenRepo(db)
+	a, b, c := createTestSecret(t, db, "a-key"), createTestSecret(t, db, "b-key"), createTestSecret(t, db, "c-key")
+	_, mt, err := repo.Create(ctx, "svc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddGrant(ctx, mt.ID, a.ID, "read", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddGrant(ctx, mt.ID, b.ID, "read", "B_OLD"); err != nil {
+		t.Fatal(err)
+	}
+
+	change, err := repo.SetGrants(ctx, mt.ID, []storage.GrantSpec{
+		{SecretID: a.ID, Permission: "read"},                    // unchanged
+		{SecretID: b.ID, Permission: "write", EnvName: "B_NEW"}, // changed
+		{SecretID: c.ID, Permission: "read"},                    // added
+	})
+	if err != nil {
+		t.Fatalf("SetGrants: %v", err)
+	}
+	if !reflect.DeepEqual(change, storage.GrantChange{Added: []int64{c.ID}, Changed: []int64{b.ID}}) {
+		t.Fatalf("change = %+v", change)
+	}
+	grants, _ := repo.ListGrants(ctx, mt.ID)
+	if len(grants) != 3 {
+		t.Fatalf("grants = %+v", grants)
+	}
+
+	change, err = repo.SetGrants(ctx, mt.ID, []storage.GrantSpec{{SecretID: c.ID, Permission: "read"}})
+	if err != nil || !reflect.DeepEqual(change, storage.GrantChange{Removed: []int64{a.ID, b.ID}}) {
+		t.Fatalf("removing: %+v, %v", change, err)
+	}
+
+	// Anything invalid leaves the grants exactly as they were.
+	before, _ := repo.ListGrants(ctx, mt.ID)
+	bad := []struct {
+		name  string
+		specs []storage.GrantSpec
+		want  error
+	}{
+		{"bad permission", []storage.GrantSpec{{SecretID: a.ID, Permission: "admin"}}, storage.ErrInvalidPermission},
+		{"bad env name", []storage.GrantSpec{{SecretID: a.ID, Permission: "read", EnvName: "lower"}}, storage.ErrInvalidEnvName},
+		{"explicit collision", []storage.GrantSpec{{SecretID: a.ID, Permission: "read", EnvName: "X"}, {SecretID: b.ID, Permission: "read", EnvName: "X"}}, storage.ErrEnvNameTaken},
+		{"derived collision", []storage.GrantSpec{{SecretID: a.ID, Permission: "read"}, {SecretID: b.ID, Permission: "read", EnvName: "A_KEY"}}, storage.ErrEnvNameTaken},
+		{"unknown secret", []storage.GrantSpec{{SecretID: a.ID, Permission: "read"}, {SecretID: 9999, Permission: "read"}}, storage.ErrSecretNotFound},
+	}
+	for _, c := range bad {
+		if _, err := repo.SetGrants(ctx, mt.ID, c.specs); !errors.Is(err, c.want) {
+			t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
+		}
+	}
+	if after, _ := repo.ListGrants(ctx, mt.ID); !reflect.DeepEqual(after, before) {
+		t.Fatalf("a refused change altered the grants:\nbefore %+v\nafter  %+v", before, after)
+	}
+	if _, err := repo.SetGrants(ctx, 9999, nil); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("unknown token: %v", err)
+	}
+	if _, err := repo.SetGrants(ctx, mt.ID, nil); err != nil {
+		t.Fatalf("clearing: %v", err)
+	}
+	if after, _ := repo.ListGrants(ctx, mt.ID); len(after) != 0 {
+		t.Fatalf("grants after clearing = %+v", after)
+	}
+}
+
+func TestGrantableToHidesGrantedRevokedAndExpiredTokens(t *testing.T) {
+	db, _ := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewTokenRepo(db)
+	s := createTestSecret(t, db, "shared")
+	other := createTestSecret(t, db, "unrelated")
+	mk := func(desc string, exp *time.Time) model.MachineToken {
+		_, mt, err := repo.Create(ctx, desc, exp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return mt
+	}
+	free, granted, revoked := mk("free", nil), mk("granted", nil), mk("revoked", nil)
+	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
+	expired, later := mk("expired", &past), mk("later", &future)
+	onOther := mk("on-other-secret", nil)
+
+	if err := repo.AddGrant(ctx, granted.ID, s.ID, "read", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddGrant(ctx, onOther.ID, other.ID, "read", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Revoke(ctx, revoked.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.GrantableTo(ctx, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, mt := range got {
+		ids = append(ids, mt.ID)
+	}
+	want := []int64{free.ID, later.ID, onOther.ID}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("grantable = %v, want %v (not granted %d, revoked %d, expired %d)", ids, want, granted.ID, revoked.ID, expired.ID)
 	}
 }

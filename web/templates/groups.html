@@ -1,0 +1,25 @@
+{{define "content"}}
+<h1>groups</h1>
+<p class="muted">A group is a named set of secrets that you can tick in one go when editing a token's access. It only helps this page: grants and the API never see groups. A secret can be in several.</p>
+{{if .Groups}}
+<table>
+    <tr><th>name</th><th>secrets</th></tr>
+    {{range .Groups}}
+    <tr>
+        <td><a href="/groups/{{.ID}}">{{.Name}}</a></td>
+        <td>{{len .SecretIDs}}</td>
+    </tr>
+    {{end}}
+</table>
+{{else}}
+<p class="muted">no groups yet</p>
+{{end}}
+
+<h2>create group</h2>
+<form class="stack" method="post" action="/groups">
+    <label>name
+        <input type="text" name="name" value="{{.Name}}" maxlength="64" required>
+    </label>
+    <button type="submit">create</button>
+</form>
+{{end}}

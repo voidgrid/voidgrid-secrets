@@ -123,6 +123,7 @@ func (r *AuditRepo) List(ctx context.Context, f AuditFilter) ([]AuditEntry, erro
 			CASE a.resource_type
 				WHEN 'secret' THEN (SELECT name FROM secrets WHERE id = a.resource_id)
 				WHEN 'token' THEN (SELECT description FROM machine_tokens WHERE id = a.resource_id)
+				WHEN 'group' THEN (SELECT name FROM secret_groups WHERE id = a.resource_id)
 			END
 		FROM audit_log a`
 	if len(where) > 0 {

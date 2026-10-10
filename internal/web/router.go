@@ -18,6 +18,7 @@ type Deps struct {
 	Recover      *RecoverHandler
 	Secrets      *SecretsHandler
 	Tokens       *TokensHandler
+	Groups       *GroupsHandler
 	Audit        *AuditHandler
 }
 
@@ -70,13 +71,20 @@ func NewRouter(deps Deps) http.Handler {
 			r.Post("/secrets/{id}/update", deps.Secrets.SubmitUpdate)
 			r.Post("/secrets/{id}/rename", deps.Secrets.SubmitRename)
 			r.Post("/secrets/{id}/delete", deps.Secrets.SubmitDelete)
+			r.Post("/secrets/{id}/grants", deps.Secrets.SubmitGrant)
 
 			r.Get("/tokens", deps.Tokens.List)
 			r.Post("/tokens", deps.Tokens.SubmitCreate)
 			r.Get("/tokens/{id}", deps.Tokens.Detail)
 			r.Post("/tokens/{id}/revoke", deps.Tokens.SubmitRevoke)
-			r.Post("/tokens/{id}/grants", deps.Tokens.SubmitGrant)
-			r.Post("/tokens/{id}/grants/{secretID}/remove", deps.Tokens.SubmitUngrant)
+			r.Post("/tokens/{id}/grants", deps.Tokens.SubmitGrants)
+
+			r.Get("/groups", deps.Groups.List)
+			r.Post("/groups", deps.Groups.SubmitCreate)
+			r.Get("/groups/{id}", deps.Groups.Detail)
+			r.Post("/groups/{id}/rename", deps.Groups.SubmitRename)
+			r.Post("/groups/{id}/delete", deps.Groups.SubmitDelete)
+			r.Post("/groups/{id}/members", deps.Groups.SubmitMembers)
 
 			r.Get("/audit", deps.Audit.List)
 		})

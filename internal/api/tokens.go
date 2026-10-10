@@ -49,6 +49,13 @@ func RegisterTokens(api huma.API, h *TokensHandler) {
 		Tags:        []string{"tokens"},
 	}, h.Grant)
 	huma.Register(api, huma.Operation{
+		OperationID: "set-token-grants", Method: "PUT", Path: "/tokens/{id}/grants",
+		Summary: "Set all of a machine token's grants at once",
+		Description: "The listed grants become the token's complete set: secrets not listed lose their grant, " +
+			"listed ones are added or updated. All or nothing - an invalid entry changes nothing.",
+		Tags: []string{"tokens"},
+	}, h.SetGrants)
+	huma.Register(api, huma.Operation{
 		OperationID: "ungrant-token", Method: "DELETE", Path: "/tokens/{id}/grants/{secret_id}",
 		Summary:     "Remove a machine token's grant on one secret",
 		Description: "Takes effect on the token's next request; 'voidgrid-secrets run' reads its secrets at start, the agent drops the file on its next poll.",
@@ -189,6 +196,46 @@ type GrantInput struct {
 		Permission string `json:"permission" enum:"read,write"`
 		EnvName    string `json:"env_name,omitempty" doc:"The environment variable name 'voidgrid-secrets run' and the agent expose this secret under. Omit to derive it from the secret's name (db-password -> DB_PASSWORD)."`
 	}
+}
+
+// GrantEntry is one grant in a SetGrantsInput.
+type GrantEntry struct {
+	SecretID   int64  `json:"secret_id"`
+	Permission string `json:"permission" enum:"read,write"`
+	EnvName    string `json:"env_name,omitempty" doc:"Omit to derive it from the secret's name."`
+}
+
+// SetGrantsInput is a token's complete grant set.
+type SetGrantsInput struct {
+	ID   int64 `path:"id" doc:"Machine token ID"`
+	Body struct {
+		Grants []GrantEntry `json:"grants"`
+	}
+}
+
+// SetGrants replaces a token's whole grant set.
+func (h *TokensHandler) SetGrants(ctx context.Context, in *SetGrantsInput) (*struct{}, error) {
+	specs := make([]storage.GrantSpec, len(in.Body.Grants))
+	for i, g := range in.Body.Grants {
+		specs[i] = storage.GrantSpec{SecretID: g.SecretID, Permission: g.Permission, EnvName: g.EnvName}
+	}
+	change, err := h.tokens.SetGrants(ctx, in.ID, specs)
+	switch {
+	case err == nil:
+	case errors.Is(err, storage.ErrInvalidPermission), errors.Is(err, storage.ErrInvalidEnvName):
+		return nil, huma.Error400BadRequest(err.Error())
+	case errors.Is(err, storage.ErrEnvNameTaken):
+		return nil, huma.Error409Conflict(err.Error())
+	case errors.Is(err, storage.ErrSecretNotFound), errors.Is(err, storage.ErrNotFound):
+		return nil, huma.Error404NotFound("no such token or secret")
+	default:
+		return nil, huma.Error500InternalServerError("internal error", err)
+	}
+	audit.Record(ctx, h.audit, audit.Event{
+		Actor: actorFrom(ctx), Action: audit.TokenGrantsSet, ResourceType: "token", ResourceID: in.ID,
+		Details: change.AuditDetails(),
+	})
+	return &struct{}{}, nil
 }
 
 // UngrantInput names the grant to remove.

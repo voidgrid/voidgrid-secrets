@@ -133,6 +133,7 @@ func newEnv(t *testing.T, completeSetup bool) env {
 		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, auditRepo),
 		RecoverHandler: api.NewRecoverHandler(recoveryService),
 		TokensHandler:  api.NewTokensHandler(tokenRepo, auditRepo),
+		GroupsHandler:  api.NewGroupsHandler(storage.NewGroupRepo(db), auditRepo),
 		AuditHandler:   api.NewAuditHandler(auditRepo),
 		Audit:          auditRepo,
 	})

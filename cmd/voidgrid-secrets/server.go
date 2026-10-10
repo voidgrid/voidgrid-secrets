@@ -54,6 +54,7 @@ func runServer(cfg config.Config) error {
 	authConfigRepo := storage.NewAuthConfigRepo(db, rootKey)
 	recoveryCodeRepo := storage.NewRecoveryCodeRepo(db)
 	resetRepo := storage.NewResetRepo(db, rootKey)
+	groupRepo := storage.NewGroupRepo(db)
 
 	go pruneAuditLog(context.Background(), auditRepo)
 
@@ -100,6 +101,7 @@ func runServer(cfg config.Config) error {
 		EnvHandler:     api.NewEnvHandler(tokenRepo, secretRepo, auditRepo),
 		RecoverHandler: api.NewRecoverHandler(recoveryService),
 		TokensHandler:  api.NewTokensHandler(tokenRepo, auditRepo),
+		GroupsHandler:  api.NewGroupsHandler(groupRepo, auditRepo),
 		AuditHandler:   api.NewAuditHandler(auditRepo),
 		Audit:          auditRepo,
 	})
@@ -110,8 +112,9 @@ func runServer(cfg config.Config) error {
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
 		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, wizard, auditRepo),
 		Recover:      web.NewRecoverHandler(recoveryService),
-		Secrets:      web.NewSecretsHandler(secretRepo, auditRepo),
-		Tokens:       web.NewTokensHandler(tokenRepo, secretRepo, auditRepo),
+		Secrets:      web.NewSecretsHandler(secretRepo, tokenRepo, auditRepo),
+		Tokens:       web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),
+		Groups:       web.NewGroupsHandler(groupRepo, secretRepo, auditRepo),
 		Audit:        web.NewAuditHandler(auditRepo, tokenRepo),
 	})
 

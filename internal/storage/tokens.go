@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rqlite/gorqlite"
@@ -150,6 +152,185 @@ func (r *TokenRepo) AddGrant(ctx context.Context, tokenID, secretID int64, permi
 		return fmt.Errorf("%w: token %d or secret %d", ErrNotFound, tokenID, secretID)
 	}
 	return nil
+}
+
+// ErrInvalidPermission is returned for a grant permission other than
+// "read" or "write".
+var ErrInvalidPermission = errors.New("storage: permission must be read or write")
+
+// GrantSpec is one grant in a SetGrants call.
+type GrantSpec struct {
+	SecretID   int64
+	Permission string
+	// EnvName is the explicit environment variable name, or "" to derive
+	// it from the secret's name.
+	EnvName string
+}
+
+// GrantChange reports what SetGrants did, by secret id.
+type GrantChange struct {
+	Added, Removed, Changed []int64
+}
+
+// AuditDetails describes the change for the audit log, as comma-separated
+// secret ids.
+func (c GrantChange) AuditDetails() map[string]string {
+	join := func(ids []int64) string {
+		parts := make([]string, len(ids))
+		for i, id := range ids {
+			parts[i] = strconv.FormatInt(id, 10)
+		}
+		return strings.Join(parts, ",")
+	}
+	return map[string]string{"added": join(c.Added), "removed": join(c.Removed), "changed": join(c.Changed)}
+}
+
+// Empty reports whether the change did nothing.
+func (c GrantChange) Empty() bool { return len(c.Added)+len(c.Removed)+len(c.Changed) == 0 }
+
+// SetGrants makes specs exactly the token's grants, in one transaction:
+// secrets not listed lose their grant, listed ones are added or updated.
+// Everything is validated first (permissions, environment variable names
+// and their collisions, that the token and secrets exist), and an invalid
+// set leaves the token's grants untouched. A secret listed twice counts
+// once, the last entry winning.
+func (r *TokenRepo) SetGrants(ctx context.Context, tokenID int64, specs []GrantSpec) (GrantChange, error) {
+	if _, err := r.Get(ctx, tokenID); err != nil {
+		return GrantChange{}, err
+	}
+	want := map[int64]GrantSpec{}
+	var order []int64
+	for _, sp := range specs {
+		if sp.Permission != "read" && sp.Permission != "write" {
+			return GrantChange{}, fmt.Errorf("%w: %q", ErrInvalidPermission, sp.Permission)
+		}
+		if sp.EnvName != "" && !envname.Valid(sp.EnvName) {
+			return GrantChange{}, fmt.Errorf("%w: %q", ErrInvalidEnvName, sp.EnvName)
+		}
+		if _, dup := want[sp.SecretID]; !dup {
+			order = append(order, sp.SecretID)
+		}
+		want[sp.SecretID] = sp
+	}
+
+	names, err := r.secretNames(ctx, order)
+	if err != nil {
+		return GrantChange{}, err
+	}
+	used := map[string]int64{}
+	for _, sid := range order {
+		eff := want[sid].EnvName
+		if eff == "" {
+			eff = envname.Derive(names[sid])
+		}
+		if _, taken := used[eff]; taken {
+			return GrantChange{}, fmt.Errorf("%w: %s", ErrEnvNameTaken, eff)
+		}
+		used[eff] = sid
+	}
+
+	old, err := r.ListGrants(ctx, tokenID)
+	if err != nil {
+		return GrantChange{}, err
+	}
+	var change GrantChange
+	had := map[int64]model.TokenGrant{}
+	for _, g := range old {
+		had[g.SecretID] = g
+		if _, keep := want[g.SecretID]; !keep {
+			change.Removed = append(change.Removed, g.SecretID)
+		}
+	}
+	for _, sid := range order {
+		g, existed := had[sid]
+		switch {
+		case !existed:
+			change.Added = append(change.Added, sid)
+		case g.Permission != want[sid].Permission || g.EnvName != want[sid].EnvName:
+			change.Changed = append(change.Changed, sid)
+		}
+	}
+
+	stmts := []gorqlite.ParameterizedStatement{{
+		Query: `DELETE FROM machine_token_grants WHERE token_id = ?`, Arguments: []interface{}{tokenID},
+	}}
+	for _, sid := range order {
+		sp := want[sid]
+		var stored interface{}
+		if sp.EnvName != "" {
+			stored = sp.EnvName
+		}
+		stmts = append(stmts, gorqlite.ParameterizedStatement{
+			Query:     `INSERT INTO machine_token_grants (token_id, secret_id, permission, env_name) VALUES (?, ?, ?, ?)`,
+			Arguments: []interface{}{tokenID, sid, sp.Permission, stored},
+		})
+	}
+	results, err := r.db.conn.WriteParameterizedContext(ctx, stmts)
+	if err := writeErrAll("set grants", results, err); err != nil {
+		if strings.Contains(err.Error(), "FOREIGN KEY") {
+			return GrantChange{}, ErrNotFound
+		}
+		return GrantChange{}, err
+	}
+	return change, nil
+}
+
+// secretNames returns the names of the given secrets, or ErrSecretNotFound
+// if any does not exist.
+func (r *TokenRepo) secretNames(ctx context.Context, ids []int64) (map[int64]string, error) {
+	names := map[int64]string{}
+	if len(ids) == 0 {
+		return names, nil
+	}
+	args := make([]interface{}, len(ids))
+	marks := make([]string, len(ids))
+	for i, id := range ids {
+		args[i], marks[i] = id, "?"
+	}
+	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+		Query: `SELECT id, name FROM secrets WHERE id IN (` + strings.Join(marks, ",") + `)`, Arguments: args,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: look up secrets: %w", err)
+	}
+	for qr.Next() {
+		var id int64
+		var name string
+		if err := qr.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("storage: scan secret name: %w", err)
+		}
+		names[id] = name
+	}
+	for _, id := range ids {
+		if _, ok := names[id]; !ok {
+			return nil, fmt.Errorf("%w: %d", ErrSecretNotFound, id)
+		}
+	}
+	return names, nil
+}
+
+// GrantableTo returns the tokens that can still be given a grant on the
+// secret: not revoked, not expired, and without a grant on it already.
+func (r *TokenRepo) GrantableTo(ctx context.Context, secretID int64) ([]model.MachineToken, error) {
+	qr, err := r.db.conn.QueryOneParameterizedContext(ctx, gorqlite.ParameterizedStatement{
+		Query: `SELECT ` + tokenColumns + ` FROM machine_tokens t
+			WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
+			AND NOT EXISTS (SELECT 1 FROM machine_token_grants g WHERE g.token_id = t.id AND g.secret_id = ?)
+			ORDER BY description COLLATE NOCASE, id`,
+		Arguments: []interface{}{nowTimestamp(), secretID},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: list tokens without a grant on secret %d: %w", secretID, err)
+	}
+	tokens := []model.MachineToken{}
+	for qr.Next() {
+		mt, err := scanMachineToken(qr)
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, mt)
+	}
+	return tokens, nil
 }
 
 // RemoveGrant takes away a token's grant on one secret. It returns

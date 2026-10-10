@@ -5,9 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
+	"github.com/voidgrid/voidgrid-secrets/internal/envname"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 	"github.com/voidgrid/voidgrid-secrets/internal/storage"
 )
@@ -18,12 +20,13 @@ import (
 // audit log.
 type SecretsHandler struct {
 	secrets *storage.SecretRepo
+	tokens  *storage.TokenRepo
 	audit   audit.Logger
 }
 
 // NewSecretsHandler returns a SecretsHandler backed by the given repos.
-func NewSecretsHandler(secrets *storage.SecretRepo, auditLog audit.Logger) *SecretsHandler {
-	return &SecretsHandler{secrets: secrets, audit: auditLog}
+func NewSecretsHandler(secrets *storage.SecretRepo, tokens *storage.TokenRepo, auditLog audit.Logger) *SecretsHandler {
+	return &SecretsHandler{secrets: secrets, tokens: tokens, audit: auditLog}
 }
 
 type secretsListPage struct {
@@ -80,6 +83,10 @@ func (h *SecretsHandler) SubmitNew(w http.ResponseWriter, r *http.Request) {
 type secretDetailPage struct {
 	basePage
 	Secret model.Secret
+	// Tokens can still be given this secret (see TokenRepo.GrantableTo).
+	Tokens []model.MachineToken
+	// Derived is the environment variable name used when none is given.
+	Derived string
 }
 
 // Detail shows one secret, its value masked.
@@ -93,7 +100,54 @@ func (h *SecretsHandler) renderDetail(w http.ResponseWriter, r *http.Request, st
 	if !ok {
 		return
 	}
-	render(w, status, "secret_detail", secretDetailPage{basePage: basePage{User: &user, Error: msg}, Secret: s})
+	tokens, err := h.tokens.GrantableTo(r.Context(), s.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	render(w, status, "secret_detail", secretDetailPage{
+		basePage: basePage{User: &user, Error: msg}, Secret: s, Tokens: tokens, Derived: envname.Derive(s.Name),
+	})
+}
+
+// SubmitGrant gives one more token a grant on this secret.
+func (h *SecretsHandler) SubmitGrant(w http.ResponseWriter, r *http.Request) {
+	user, _ := session.FromContext(r.Context())
+	s, ok := h.loadForm(w, r)
+	if !ok {
+		return
+	}
+	tokenID, err := parseFormInt64(r, "token_id")
+	if err != nil {
+		h.renderDetail(w, r, http.StatusBadRequest, "choose a token")
+		return
+	}
+	permission, envName := r.FormValue("permission"), strings.TrimSpace(r.FormValue("env_name"))
+	if permission != "read" && permission != "write" {
+		http.Error(w, "invalid permission", http.StatusBadRequest)
+		return
+	}
+	err = h.tokens.AddGrant(r.Context(), tokenID, s.ID, permission, envName)
+	switch {
+	case err == nil:
+	case errors.Is(err, storage.ErrInvalidEnvName):
+		h.renderDetail(w, r, http.StatusBadRequest, "invalid environment variable name: use uppercase letters, digits and underscores, not starting with a digit")
+		return
+	case errors.Is(err, storage.ErrEnvNameTaken):
+		h.renderDetail(w, r, http.StatusConflict, "that token already uses this environment variable name for another secret - set a different one")
+		return
+	case errors.Is(err, storage.ErrNotFound), errors.Is(err, storage.ErrSecretNotFound):
+		h.renderDetail(w, r, http.StatusNotFound, "that token no longer exists")
+		return
+	default:
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	audit.Record(r.Context(), h.audit, audit.Event{
+		Actor: audit.User(user.ID), Action: audit.TokenGrant, ResourceType: "token", ResourceID: tokenID,
+		Details: map[string]string{"secret_id": strconv.FormatInt(s.ID, 10), "permission": permission, "env_name": envName},
+	})
+	http.Redirect(w, r, "/secrets/"+strconv.FormatInt(s.ID, 10), http.StatusSeeOther)
 }
 
 // Value returns a secret's value as JSON, for the "show" button. It's

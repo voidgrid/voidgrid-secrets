@@ -29,6 +29,7 @@ type Deps struct {
 	EnvHandler     *EnvHandler
 	RecoverHandler *RecoverHandler
 	TokensHandler  *TokensHandler
+	GroupsHandler  *GroupsHandler
 	AuditHandler   *AuditHandler
 	// Audit records rejected machine tokens.
 	Audit audit.Logger
@@ -53,8 +54,8 @@ type Deps struct {
 //   - env is machine-token-only: every secret the token may read, with the
 //     environment variable name each is exposed under, for `run` and the
 //     agent.
-//   - tokens/* and audit are session-only: a machine token can never
-//     manage tokens or read the audit log.
+//   - tokens/*, groups/* and audit are session-only: a machine token can
+//     never manage tokens, groups or read the audit log.
 func NewRouter(deps Deps) http.Handler {
 	router := chi.NewMux()
 	router.Use(noStore)
@@ -79,6 +80,7 @@ func NewRouter(deps Deps) http.Handler {
 	account := huma.NewGroup(v1)
 	account.UseMiddleware(sessionAuthMiddleware(humaAPI, deps.SessionAuth))
 	RegisterTokens(account, deps.TokensHandler)
+	RegisterGroups(account, deps.GroupsHandler)
 	RegisterAudit(account, deps.AuditHandler)
 
 	// Same protection as the web UI (see web.crossOriginProtection): the

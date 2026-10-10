@@ -21,16 +21,32 @@ service its own token.
 ## 3. Grant it the secret
 
 Open the token (click its id or description in the list; right after
-creating it there is a link) and, under **grant a secret**, pick the secret, leave
-permission on **read**, and optionally set the environment variable name
-(`MYAPP_DB_PASSWORD`). If you leave the name blank it is derived from the
-secret's name (`db-password` becomes `DB_PASSWORD`). The token's page lists
-every secret it can read and the name each will have.
+creating it there is a link). Its page is one editor for everything the
+token may use: tick each secret it needs, leave permission on **read**, and
+optionally set the environment variable name (`MYAPP_DB_PASSWORD`). A blank
+name is derived from the secret's name (`db-password` becomes
+`DB_PASSWORD`) and shown in grey. Press **save**: the ticked secrets become
+the token's complete set, so unticking one removes it. A save is all or
+nothing - if a name is invalid or clashes with another, nothing changes and
+you keep what you typed.
 
-To take a secret away from a token, press **remove** next to it on the
-token's page (or revoke the token to cut off everything). `run` reads its
-secrets when the container starts, so restart the container to drop one;
-the agent removes the file on its next poll.
+You can also start from the secret: on a secret's page, **add to a token**
+lists the tokens that can still take it (not revoked or expired, and without
+a grant on it yet).
+
+`run` reads its secrets when the container starts, so restart the container
+to drop one; the agent removes the file on its next poll. Revoking the
+token cuts off everything at once.
+
+### Groups
+
+If several tokens need the same handful of secrets, make a **group** (the
+**groups** page) and tick its secrets. On a token's page, each group appears
+as a quick-select checkbox: ticking it ticks all the group's secrets, and you
+can still untick any of them before saving. A secret can be in several
+groups. Groups only help you tick things in the web UI. Grants, tokens and
+the API never refer to them, so changing or deleting a group changes no
+access.
 
 ## 4. Use it from a container
 

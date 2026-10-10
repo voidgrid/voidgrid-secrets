@@ -34,7 +34,7 @@ func init() {
 		"setup_init", "setup_confirm", "setup_oidc", "setup_oidc_done",
 		"recovery_codes", "login", "signin_continue", "recover", "recover_reset",
 		"secrets_list", "secret_new", "secret_detail",
-		"tokens", "token_detail", "audit",
+		"tokens", "token_detail", "groups", "group_detail", "audit",
 	} {
 		pages[name] = template.Must(template.New("layout").ParseFS(
 			webassets.FS, "templates/layout.html", "templates/"+name+".html",

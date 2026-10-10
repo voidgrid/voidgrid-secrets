@@ -2,40 +2,32 @@
 <h1>token #{{.Token.ID}}</h1>
 <p class="muted">{{.Token.Description}}{{if .Token.RevokedAt}} - revoked{{end}}</p>
 
-<h2>secrets this token can read</h2>
-{{if .Grants}}
-<table>
-    <tr><th>secret</th><th>permission</th><th>environment variable</th><th></th></tr>
-    {{range .Grants}}
-    <tr><td><a href="/secrets/{{.SecretID}}">{{.SecretName}}</a></td><td>{{.Permission}}</td><td><code>{{.EffectiveEnvName}}</code>{{if not .EnvName}} <span class="muted">(derived)</span>{{end}}</td>
-        <td><form method="post" action="/tokens/{{$.Token.ID}}/grants/{{.SecretID}}/remove"><button type="submit">remove</button></form></td></tr>
+<h2>secrets this token can use</h2>
+{{if .Rows}}
+<form class="editor" method="post" action="/tokens/{{.Token.ID}}/grants">
+    {{if .Groups}}
+    <p class="muted">quick select - tick a group to tick all its secrets:</p>
+    <p>{{range .Groups}}<label class="check"><input type="checkbox" data-group-members="{{.Members}}"> {{.Name}} ({{.Count}})</label>{{end}}</p>
     {{end}}
-</table>
-<p class="muted"><code>voidgrid-secrets run</code> and the agent expose each secret under its environment variable name.</p>
-{{else}}
-<p class="muted">none yet</p>
-{{end}}
-
-<h2>grant a secret</h2>
-{{if .Secrets}}
-<form class="stack" method="post" action="/tokens/{{.Token.ID}}/grants">
-    <label>secret
-        <select name="secret_id" required>
-            {{range .Secrets}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
-        </select>
-    </label>
-    <label>permission
-        <select name="permission">
-            <option value="read">read</option>
-            <option value="write">write</option>
-        </select>
-    </label>
-    <label>environment variable name (optional)
-        <input type="text" name="env_name" pattern="[A-Z_][A-Z0-9_]*" placeholder="derived from the secret name if blank">
-    </label>
-    <button type="submit">grant</button>
+    <table>
+        <tr><th></th><th>secret</th><th>permission</th><th>environment variable</th></tr>
+        {{range .Rows}}
+        <tr>
+            <td><input type="checkbox" name="secret" value="{{.SecretID}}" data-secret="{{.SecretID}}"{{if .Checked}} checked{{end}} aria-label="allow {{.Name}}"></td>
+            <td><a href="/secrets/{{.SecretID}}">{{.Name}}</a></td>
+            <td>
+                <select name="perm_{{.SecretID}}">
+                    <option value="read"{{if eq .Permission "read"}} selected{{end}}>read</option>
+                    <option value="write"{{if eq .Permission "write"}} selected{{end}}>write</option>
+                </select>
+            </td>
+            <td><input type="text" name="env_{{.SecretID}}" value="{{.EnvName}}" pattern="[A-Z_][A-Z0-9_]*" placeholder="{{.Derived}}"></td>
+        </tr>
+        {{end}}
+    </table>
+    <div><button type="submit">save</button></div>
 </form>
-<p class="muted">Granting a secret the token already has replaces its permission and name.</p>
+<p class="muted">Ticked secrets are what this token may use; saving removes the unticked ones, all at once. A blank environment variable name uses the grey one. <code>voidgrid-secrets run</code> and the agent expose each secret under that name.</p>
 {{else}}
 <p class="muted"><a href="/secrets/new">create a secret</a> first</p>
 {{end}}

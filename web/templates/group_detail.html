@@ -1,0 +1,35 @@
+{{define "content"}}
+<h1>{{.Group.Name}}</h1>
+
+<h2>secrets in this group</h2>
+{{if .Rows}}
+<form class="editor" method="post" action="/groups/{{.Group.ID}}/members">
+    <table>
+        <tr><th></th><th>secret</th></tr>
+        {{range .Rows}}
+        <tr>
+            <td><input type="checkbox" name="secret" value="{{.SecretID}}"{{if .Checked}} checked{{end}} aria-label="include {{.Name}}"></td>
+            <td><a href="/secrets/{{.SecretID}}">{{.Name}}</a></td>
+        </tr>
+        {{end}}
+    </table>
+    <div><button type="submit">save</button></div>
+</form>
+{{else}}
+<p class="muted"><a href="/secrets/new">create a secret</a> first</p>
+{{end}}
+
+<h2>rename</h2>
+<form class="stack" method="post" action="/groups/{{.Group.ID}}/rename">
+    <label>name
+        <input type="text" name="name" value="{{.Group.Name}}" maxlength="64" required>
+    </label>
+    <button type="submit">rename</button>
+</form>
+
+<h2>delete</h2>
+<form method="post" action="/groups/{{.Group.ID}}/delete" data-confirm="Delete the group {{.Group.Name}}? The secrets and every grant stay as they are.">
+    <button type="submit">delete group</button>
+</form>
+<div class="actions"><a href="/groups">back to groups</a></div>
+{{end}}

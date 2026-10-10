@@ -34,6 +34,8 @@ type env struct {
 	secrets    *storage.SecretRepo
 	authConfig *storage.AuthConfigRepo
 	tokens     *storage.TokenRepo
+	groups     *storage.GroupRepo
+	audit      *storage.AuditRepo
 }
 
 const testSetupToken = "vgs_setup_test" //nolint:gosec // fake test fixture, not a real credential
@@ -79,6 +81,7 @@ func newEnv(t *testing.T) env {
 	rootKey := make([]byte, crypto.KeySize)
 	secretRepo := storage.NewSecretRepo(db, rootKey)
 	tokenRepo := storage.NewTokenRepo(db)
+	groupRepo := storage.NewGroupRepo(db)
 	userRepo := storage.NewUserRepo(db, rootKey)
 	sessionRepo := storage.NewSessionRepo(db)
 	authConfigRepo := storage.NewAuthConfigRepo(db, rootKey)
@@ -115,12 +118,13 @@ func newEnv(t *testing.T) env {
 			Users: userRepo, Resets: storage.NewResetRepo(db, rootKey), RecoveryCodes: recoveryCodeRepo, Sessions: sessionRepo,
 			GenerateTOTP: gototp.Generate, ValidateTOTP: gototp.Validate, HashPassword: crypto.HashPassword, Audit: auditRepo,
 		}),
-		Secrets: web.NewSecretsHandler(secretRepo, auditRepo),
-		Tokens:  web.NewTokensHandler(tokenRepo, secretRepo, auditRepo),
+		Secrets: web.NewSecretsHandler(secretRepo, tokenRepo, auditRepo),
+		Tokens:  web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),
+		Groups:  web.NewGroupsHandler(groupRepo, secretRepo, auditRepo),
 		Audit:   web.NewAuditHandler(auditRepo, tokenRepo),
 	})
 
-	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo, tokens: tokenRepo}
+	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo, tokens: tokenRepo, groups: groupRepo, audit: auditRepo}
 }
 
 func freePort(t *testing.T) int {

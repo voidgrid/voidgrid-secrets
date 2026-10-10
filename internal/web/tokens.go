@@ -3,9 +3,10 @@ package web
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/envname"
@@ -17,12 +18,13 @@ import (
 type TokensHandler struct {
 	tokens  *storage.TokenRepo
 	secrets *storage.SecretRepo
+	groups  *storage.GroupRepo
 	audit   audit.Logger
 }
 
 // NewTokensHandler returns a TokensHandler backed by the given repos.
-func NewTokensHandler(tokens *storage.TokenRepo, secrets *storage.SecretRepo, auditLog audit.Logger) *TokensHandler {
-	return &TokensHandler{tokens: tokens, secrets: secrets, audit: auditLog}
+func NewTokensHandler(tokens *storage.TokenRepo, secrets *storage.SecretRepo, groups *storage.GroupRepo, auditLog audit.Logger) *TokensHandler {
+	return &TokensHandler{tokens: tokens, secrets: secrets, groups: groups, audit: auditLog}
 }
 
 type tokensPage struct {
@@ -69,30 +71,44 @@ func (h *TokensHandler) SubmitCreate(w http.ResponseWriter, r *http.Request) {
 	h.renderList(w, r, user, plaintext, mt.ID)
 }
 
-// grantRow is one grant with its effective environment variable name.
+// grantRow is one secret in the grant editor: whether the token has it,
+// with what permission, and under which environment variable name.
 type grantRow struct {
-	model.TokenGrant
-	EffectiveEnvName string
+	SecretID   int64
+	Name       string
+	Checked    bool
+	Permission string
+	EnvName    string // explicit name, "" if derived
+	Derived    string // the name used when EnvName is blank
+}
+
+// groupChoice is a quick-select toggle: ticking it ticks these secrets.
+type groupChoice struct {
+	Name    string
+	Members string // comma-separated secret ids, for the page's script
+	Count   int
 }
 
 type tokenDetailPage struct {
 	basePage
-	Token   model.MachineToken
-	Grants  []grantRow
-	Secrets []model.Secret
+	Token  model.MachineToken
+	Rows   []grantRow
+	Groups []groupChoice
 }
 
-// Detail shows a token, its grants, and the form to grant more.
+// Detail shows a token and the editor for its grants.
 func (h *TokensHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	id, err := idParam(r)
 	if err != nil {
 		http.Error(w, "invalid token id", http.StatusBadRequest)
 		return
 	}
-	h.renderDetail(w, r, id, http.StatusOK, "")
+	h.renderDetail(w, r, id, http.StatusOK, "", nil)
 }
 
-func (h *TokensHandler) renderDetail(w http.ResponseWriter, r *http.Request, id int64, status int, msg string) {
+// renderDetail renders the editor from the stored grants, or - after a
+// refused save - from the submitted form, so nothing typed is lost.
+func (h *TokensHandler) renderDetail(w http.ResponseWriter, r *http.Request, id int64, status int, msg string, submitted url.Values) {
 	user, _ := session.FromContext(r.Context())
 	mt, err := h.tokens.Get(r.Context(), id)
 	if errors.Is(err, storage.ErrNotFound) {
@@ -113,13 +129,42 @@ func (h *TokensHandler) renderDetail(w http.ResponseWriter, r *http.Request, id 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	page := tokenDetailPage{basePage: basePage{User: &user, Error: msg}, Token: mt, Secrets: secrets}
+	groups, err := h.groups.List(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	stored := map[int64]model.TokenGrant{}
 	for _, g := range grants {
-		eff := g.EnvName
-		if eff == "" {
-			eff = envname.Derive(g.SecretName)
+		stored[g.SecretID] = g
+	}
+	ticked := map[string]bool{}
+	for _, v := range submitted["secret"] {
+		ticked[v] = true
+	}
+
+	page := tokenDetailPage{basePage: basePage{User: &user, Error: msg}, Token: mt}
+	for _, s := range secrets {
+		key := strconv.FormatInt(s.ID, 10)
+		row := grantRow{SecretID: s.ID, Name: s.Name, Permission: "read", Derived: envname.Derive(s.Name)}
+		if submitted != nil {
+			row.Checked = ticked[key]
+			if p := submitted.Get("perm_" + key); p == "read" || p == "write" {
+				row.Permission = p
+			}
+			row.EnvName = strings.TrimSpace(submitted.Get("env_" + key))
+		} else if g, ok := stored[s.ID]; ok {
+			row.Checked, row.Permission, row.EnvName = true, g.Permission, g.EnvName
 		}
-		page.Grants = append(page.Grants, grantRow{TokenGrant: g, EffectiveEnvName: eff})
+		page.Rows = append(page.Rows, row)
+	}
+	for _, g := range groups {
+		ids := make([]string, len(g.SecretIDs))
+		for i, sid := range g.SecretIDs {
+			ids[i] = strconv.FormatInt(sid, 10)
+		}
+		page.Groups = append(page.Groups, groupChoice{Name: g.Name, Members: strings.Join(ids, ","), Count: len(ids)})
 	}
 	render(w, status, "token_detail", page)
 }
@@ -140,37 +185,9 @@ func (h *TokensHandler) SubmitRevoke(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
 }
 
-// SubmitUngrant removes a token's grant on one secret.
-func (h *TokensHandler) SubmitUngrant(w http.ResponseWriter, r *http.Request) {
-	user, _ := session.FromContext(r.Context())
-	id, err := idParam(r)
-	if err != nil {
-		http.Error(w, "invalid token id", http.StatusBadRequest)
-		return
-	}
-	secretID, err := strconv.ParseInt(chi.URLParam(r, "secretID"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid secret id", http.StatusBadRequest)
-		return
-	}
-	switch err := h.tokens.RemoveGrant(r.Context(), id, secretID); {
-	case err == nil:
-	case errors.Is(err, storage.ErrNotFound):
-		h.renderDetail(w, r, id, http.StatusNotFound, "that grant no longer exists")
-		return
-	default:
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	audit.Record(r.Context(), h.audit, audit.Event{
-		Actor: audit.User(user.ID), Action: audit.TokenUngrant, ResourceType: "token", ResourceID: id,
-		Details: map[string]string{"secret_id": strconv.FormatInt(secretID, 10)},
-	})
-	http.Redirect(w, r, "/tokens/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
-}
-
-// SubmitGrant grants a token read or write on a secret.
-func (h *TokensHandler) SubmitGrant(w http.ResponseWriter, r *http.Request) {
+// SubmitGrants saves the editor: the ticked secrets become the token's
+// complete set of grants, in one all-or-nothing change.
+func (h *TokensHandler) SubmitGrants(w http.ResponseWriter, r *http.Request) {
 	user, _ := session.FromContext(r.Context())
 	id, err := idParam(r)
 	if err != nil {
@@ -181,31 +198,51 @@ func (h *TokensHandler) SubmitGrant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	secretID, err := parseFormInt64(r, "secret_id")
-	if err != nil {
-		h.renderDetail(w, r, id, http.StatusBadRequest, "choose a secret")
-		return
+	var specs []storage.GrantSpec
+	for _, v := range r.Form["secret"] {
+		sid, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid secret id", http.StatusBadRequest)
+			return
+		}
+		perm := r.FormValue("perm_" + v)
+		if perm == "" {
+			perm = "read"
+		}
+		specs = append(specs, storage.GrantSpec{SecretID: sid, Permission: perm, EnvName: strings.TrimSpace(r.FormValue("env_" + v))})
 	}
-	permission, envName := r.FormValue("permission"), r.FormValue("env_name")
-	err = h.tokens.AddGrant(r.Context(), id, secretID, permission, envName)
+
+	change, err := h.tokens.SetGrants(r.Context(), id, specs)
 	switch {
 	case err == nil:
 	case errors.Is(err, storage.ErrInvalidEnvName):
-		h.renderDetail(w, r, id, http.StatusBadRequest, "invalid environment variable name: use uppercase letters, digits and underscores, not starting with a digit")
+		h.renderDetail(w, r, id, http.StatusBadRequest, "invalid environment variable name: use uppercase letters, digits and underscores, not starting with a digit - nothing was saved", r.Form)
 		return
 	case errors.Is(err, storage.ErrEnvNameTaken):
-		h.renderDetail(w, r, id, http.StatusConflict, "another secret on this token already uses that environment variable name - set a different one")
+		name := err.Error()
+		if i := strings.LastIndex(name, ": "); i >= 0 {
+			name = name[i+2:]
+		}
+		h.renderDetail(w, r, id, http.StatusConflict, "two secrets would use the environment variable name "+name+" - give one a different name; nothing was saved", r.Form)
 		return
-	case errors.Is(err, storage.ErrSecretNotFound), errors.Is(err, storage.ErrNotFound):
-		h.renderDetail(w, r, id, http.StatusNotFound, "that secret no longer exists")
+	case errors.Is(err, storage.ErrSecretNotFound):
+		h.renderDetail(w, r, id, http.StatusNotFound, "a ticked secret no longer exists - nothing was saved", r.Form)
+		return
+	case errors.Is(err, storage.ErrNotFound):
+		http.Error(w, "token not found", http.StatusNotFound)
+		return
+	case errors.Is(err, storage.ErrInvalidPermission):
+		http.Error(w, "invalid permission", http.StatusBadRequest)
 		return
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	audit.Record(r.Context(), h.audit, audit.Event{
-		Actor: audit.User(user.ID), Action: audit.TokenGrant, ResourceType: "token", ResourceID: id,
-		Details: map[string]string{"secret_id": strconv.FormatInt(secretID, 10), "permission": permission, "env_name": envName},
-	})
+	if !change.Empty() {
+		audit.Record(r.Context(), h.audit, audit.Event{
+			Actor: audit.User(user.ID), Action: audit.TokenGrantsSet, ResourceType: "token", ResourceID: id,
+			Details: change.AuditDetails(),
+		})
+	}
 	http.Redirect(w, r, "/tokens/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
