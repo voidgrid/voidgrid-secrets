@@ -35,10 +35,68 @@ docker run --rm --entrypoint /usr/local/bin/voidgrid-secrets -v voidgrid-root-ke
 material.** Losing the key makes every stored secret permanently
 unrecoverable; there is no recovery path other than restoring it.
 
-If you supply the key file yourself instead (for example as a mounted
-Docker secret), it must be readable by UID 1000 and must not be
-accessible to group or others (mode `0600`) - the service refuses to load
-a key file with looser permissions.
+If you supply the key file yourself instead, it must be readable by UID
+1000 and must not be accessible to group or others (mode `0600`) - the
+service refuses to load a key file with looser permissions.
+
+### Keeping the key out of Docker volumes
+
+A named volume keeps the key inside Docker's storage, next to everything
+else. If you would rather have it at a host path of your choice, outside
+every Docker volume (so a copy or backup of the data volume can never
+contain it), mount it as a Compose secret. The app already looks for it at
+`/run/secrets/voidgrid-root-key`, which is where Docker mounts secrets.
+
+Generate the key on the host, into a directory UID 1000 can write to:
+
+```
+docker run --rm --user 1000:1000 -v "$PWD/keys":/k ghcr.io/voidgrid/voidgrid-secrets:beta keygen -path /k/voidgrid-root-key
+```
+
+That creates `keys/voidgrid-root-key` owned by UID 1000 with mode `0600`. If
+your host user is not UID 1000, run `chown 1000:1000` on the file afterwards.
+Then, in your compose file, drop the `voidgrid-root-key` volume and its
+mount at `/run/secrets`, and add:
+
+```yaml
+services:
+  voidgrid-secrets:
+    secrets:
+      - voidgrid-root-key
+
+secrets:
+  voidgrid-root-key:
+    file: ./keys/voidgrid-root-key
+```
+
+Plain Compose (without Swarm) bind-mounts the file with its host owner and
+mode, and ignores the `uid`, `gid` and `mode` options on the secret, so the
+file itself must be right. If it isn't, the container exits with the reason
+in its log:
+
+| Host file | Log message |
+|---|---|
+| mode `0644` (or any group/other access) | `root key file must not be group- or other-accessible (expected mode 0600)` |
+| mode `0600` but owned by another user, such as root | `read root key file: open /run/secrets/voidgrid-root-key: permission denied` |
+
+Swarm secrets work the same way in principle but are mounted root-owned and
+world-readable by default; you would need to set the secret's `uid` to `1000`
+and its `mode` to `0400` on the service. That is untested here.
+
+### What the root key does and does not protect against
+
+The app has to read the key to decrypt your secrets without you being
+there, so the key is always readable by something. What it protects against
+is a stolen database file, backup or data volume, because those are useless
+without the key. It does not protect against root on the host (who can read
+the key file, the app's memory, or exec into the container) or against an
+attacker running code inside the app.
+
+So: keep the key apart from the database in your backups, keep the host
+locked down, and keep a safe copy of the key - losing it makes every secret
+unrecoverable. Keeping the key off disk entirely (a passphrase typed at each
+start, a hardware module, or a cloud key service) means giving up unattended
+restarts or taking on a dependency, and is not supported here.
 
 ## 2. Run it
 
@@ -62,6 +120,16 @@ number might suggest) and has no TLS of its own. Sign-in cookies are
 marked `Secure`, which browsers drop over plain HTTP, so by default sign-in
 works only over HTTPS: put a reverse proxy (Caddy, Traefik, nginx) in front
 of it and have it send `X-Forwarded-Proto: https`.
+
+**HSTS belongs on the proxy.** Once your proxy serves the app over HTTPS, have
+it also send `Strict-Transport-Security: max-age=31536000`, so browsers
+refuse to fall back to plain HTTP for that hostname. The app doesn't send it
+itself because it also serves plain HTTP on the trusted networks below, and
+HSTS only applies to the hostname the header came from, not to the LAN
+address. Start with a short `max-age` (a day) while you check that nothing
+else on the same domain still needs plain HTTP, and avoid `includeSubDomains`
+unless every subdomain is HTTPS-only. How you add a header depends on your
+proxy; the value is the same everywhere.
 
 For a homelab you can instead allow plain-HTTP sign-in from your own
 networks. Set `VOIDGRID_HTTP_ALLOWED_NETS` to a comma-separated list of

@@ -34,6 +34,13 @@ services:
     volumes:
       - voidgrid-data:/data
       - voidgrid-root-key:/run/secrets
+    # To keep the root key out of Docker volumes instead, remove the
+    # voidgrid-root-key volume line above and use a Compose secret (a host
+    # file owned by UID 1000, mode 0600). See docs/deployment.md, "Keeping
+    # the key out of Docker volumes":
+    #
+    # secrets:
+    #   - voidgrid-root-key
 
   # --- Example consumer. Uncomment this block, the voidgrid-bin volume and
   # the secrets block at the bottom.
@@ -120,6 +127,8 @@ volumes:
   #     o: "size=1m,uid=1000,gid=1000,mode=0700"
 
 # secrets:
+#   voidgrid-root-key:                 # only for the root key as a secret, see above
+#     file: ./keys/voidgrid-root-key
 #   voidgrid-token:
 #     file: ./example-consumer-voidgrid-token
 #   postgres-token:
