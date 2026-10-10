@@ -48,8 +48,9 @@ unprivileged as UID/GID 1000.
 ## Documentation
 
 - [docs/deployment.md](docs/deployment.md) - running the image, the root
-  key, volumes, HTTPS or trusted networks, backup and restore, upgrading,
-  restarts, environment variables, using secrets from other containers.
+  key, volumes, HTTPS or trusted networks, backup and restore, looking
+  inside the database, moving from rqlite, upgrading, restarts,
+  environment variables, using secrets from other containers.
 - [docs/first-steps.md](docs/first-steps.md) - add a secret, create a token,
   grant it, and use it from a container.
 - [docs/authentication.md](docs/authentication.md) - the setup wizard,
@@ -63,8 +64,8 @@ unprivileged as UID/GID 1000.
   viewer at `/audit`.
 - [docs/runtime-injection.md](docs/runtime-injection.md) -
   `voidgrid-secrets run`: give another container its secrets at startup,
-  as environment variables or tmpfs files, without writing them to disk;
-  and `voidgrid-secrets agent`: a sidecar that keeps consumers' secrets
+  as environment variables or tmpfs files, without writing them to disk
+  (and how to update it); and `voidgrid-secrets agent`: a sidecar that keeps consumers' secrets
   as files on a shared in-memory volume, with no wrapper.
 - [examples/docker-compose.yml](examples/docker-compose.yml) - a complete
   compose example, including consumer services that get their secrets via

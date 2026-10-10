@@ -161,6 +161,30 @@ Prefer a token file over `VOIDGRID_TOKEN`: a variable set in compose ends
 up in `docker inspect`, which is exactly what this avoids for the secrets
 themselves.
 
+## Updating `run`
+
+The copy of `voidgrid-secrets` in your consumer stack is only refreshed when
+its helper service runs again. With the helper from step 2, a plain
+`docker compose up -d` starts it again every time, and recreates it when the
+image behind the tag has changed, so after pulling:
+
+```
+docker compose pull; docker compose up -d
+```
+
+the copy on disk is the new one. Your running consumer is not touched: `run`
+replaced itself with your app at start, so the old process keeps running
+unchanged. The consumer uses the new copy the next time it starts:
+
+```
+docker compose restart myapp
+```
+
+If you pin the image to a version tag, change the tag in your compose file
+first. You only need to refresh it for new behavior in `run` itself: it
+talks to the server only through `GET /api/v1/env`, so an older copy keeps
+working against a newer server.
+
 ## Limits
 
 - **The token itself still has to reach the container.** As a Docker
@@ -182,8 +206,12 @@ needs no wrapper, no copy of the binary and no entrypoint changes - only
 a volume mount and the `*_FILE` variables its image already supports.
 
 ```
-voidgrid-secrets agent --url URL --out DIR --target NAME=TOKEN_FILE,gid=GID [--target ...] [--interval 1m] [--timeout 30s]
+voidgrid-secrets agent --url URL --out DIR --target NAME=TOKEN_FILE,gid=GID [--target ...] [--interval 1m] [--timeout 30s] [--ready-file PATH]
 ```
+
+`--ready-file` is the file the agent creates once every target is written,
+for a healthcheck to wait on (default `/tmp/voidgrid-agent-ready`, as used in
+the example below).
 
 Each `--target` is one consumer: the subdirectory its files go in
 (`DIR/NAME`), the token whose grants decide what goes there, and the group
