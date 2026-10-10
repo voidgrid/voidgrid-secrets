@@ -4,7 +4,8 @@
 # single SQLite file (/data/voidgrid.db) opened by the app itself, so the
 # app is the only process: no supervisor, no separate database server.
 # alpine (not distroless) keeps a shell and wget for the healthcheck and for
-# operators who exec in.
+# operators who exec in, and the sqlite3 command-line tool for looking
+# inside the database (read-only, see docs/deployment.md).
 
 # The test toolchain, shared by the image build below and by
 # scripts/test.sh (`make test`, which builds just this stage and runs the
@@ -30,7 +31,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/voidgrid/voidgrid-secre
     -o /out/voidgrid-secrets ./cmd/voidgrid-secrets
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates sqlite
 COPY --from=builder /out/voidgrid-secrets /usr/local/bin/voidgrid-secrets
 
 # Nothing here needs root, so the container runs as UID/GID 1000. /data,

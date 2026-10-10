@@ -100,7 +100,10 @@ docker compose logs voidgrid-secrets
   upgraded from `v0.1.0-beta.5` or earlier without exporting your data. Nothing
   is lost; follow [Moving from rqlite](deployment.md#moving-from-rqlite).
 - **`DATABASE PROBLEM: ...`** near the top of the log - SQLite reported a
-  problem with the file or its relationships; restore from a backup.
+  problem with the file or its relationships. Look with `docker compose exec
+  voidgrid-secrets sqlite3 -readonly /data/voidgrid.db "PRAGMA integrity_check"`
+  ([deployment.md](deployment.md#looking-inside-the-database)); if it isn't
+  `ok`, restore from a backup.
 - **The key was lost or replaced:** every stored secret is unrecoverable
   without the key it was encrypted under. Restore the key volume from a
   backup taken together with the database

@@ -176,6 +176,26 @@ The `chown` covers the directory as well as the file: SQLite creates its
 write there. This replaces what is currently in those volumes, so only run
 it when you mean to. Restore the database and the key from the same backup.
 
+## Looking inside the database
+
+The image includes the `sqlite3` command-line tool. Open the database
+**read-only** - it is safe while the server runs - to check on it:
+
+```
+docker compose exec voidgrid-secrets sqlite3 -readonly /data/voidgrid.db "SELECT (SELECT count(*) FROM secrets) AS secrets, (SELECT count(*) FROM machine_tokens) AS tokens, (SELECT count(*) FROM machine_token_grants) AS grants, (SELECT count(*) FROM audit_log) AS audit"
+```
+
+```
+docker compose exec voidgrid-secrets sqlite3 -readonly /data/voidgrid.db "PRAGMA integrity_check"
+```
+
+The second prints `ok` for a healthy file. Secret names, token
+descriptions and the audit log are readable; secret values are stored
+encrypted and show as ciphertext. **Don't write with it.** The app keeps
+rules the database can't (encryption bound to each row, audit entries,
+at-most-one account); change things through the web UI or API, and restore a
+backup if you need to go back.
+
 ## Moving from rqlite
 
 Up to `v0.1.0-beta.5` the data lived in an embedded rqlite database.
