@@ -298,3 +298,59 @@ func TestWebNewSecretGroupsAndAddAnother(t *testing.T) {
 		t.Fatal("secret four should exist")
 	}
 }
+
+func TestWebNewSecretGrantsTokens(t *testing.T) {
+	e := newEnv(t)
+	completeSetupDirect(t, e)
+	cookie := ownerSession(t, e)
+	ctx := context.Background()
+	_, one, _ := e.tokens.Create(ctx, "svc-one", nil)
+	_, two, _ := e.tokens.Create(ctx, "svc-two", nil)
+	_, gone, _ := e.tokens.Create(ctx, "revoked-svc", nil)
+	if err := e.tokens.Revoke(ctx, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	page := get(t, e, "/secrets/new", cookie).Body.String()
+	if !strings.Contains(page, `name="token" value="`+idStr(one.ID)+`"`) || !strings.Contains(page, `name="permission"`) || strings.Contains(page, "revoked-svc") {
+		t.Fatalf("form should list only usable tokens:\n%s", page)
+	}
+
+	// Two tokens at once, read by default.
+	rec := doForm(t, e.handler, "/secrets/new", url.Values{
+		"name": {"db-password"}, "value": {"v"}, "token": {idStr(one.ID), idStr(two.ID)},
+	}, cookie)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/secrets" {
+		t.Fatalf("save: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	for _, tok := range []int64{one.ID, two.ID} {
+		grants, _ := e.tokens.ListGrants(ctx, tok)
+		if len(grants) != 1 || grants[0].Permission != "read" || grants[0].SecretName != "db-password" {
+			t.Fatalf("token %d grants = %+v", tok, grants)
+		}
+	}
+
+	// Write permission; add another resets the grant ticks.
+	rec = doForm(t, e.handler, "/secrets/new", url.Values{
+		"name": {"api-key"}, "value": {"v"}, "token": {idStr(one.ID)}, "permission": {"write"}, "action": {"another"},
+	}, cookie)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `name="token" value="`+idStr(one.ID)+`" checked`) {
+		t.Fatalf("add another: %d, grant ticks should be reset:\n%s", rec.Code, rec.Body.String())
+	}
+	grants, _ := e.tokens.ListGrants(ctx, one.ID)
+	if len(grants) != 2 {
+		t.Fatalf("grants = %+v", grants)
+	}
+
+	// A refused submit keeps the ticks.
+	rec = doForm(t, e.handler, "/secrets/new", url.Values{
+		"name": {"api-key"}, "value": {"v"}, "token": {idStr(two.ID)}, "permission": {"write"},
+	}, cookie)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `value="`+idStr(two.ID)+`" checked`) || !strings.Contains(rec.Body.String(), `value="write" selected`) {
+		t.Fatalf("duplicate name: %d\n%s", rec.Code, rec.Body.String())
+	}
+
+	if rec := doForm(t, e.handler, "/secrets/new", url.Values{"name": {"x"}, "value": {"v"}, "permission": {"admin"}}, cookie); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad permission: %d", rec.Code)
+	}
+}

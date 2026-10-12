@@ -7,11 +7,13 @@ all the way to a container using it.
 
 Go to **secrets** and choose **new secret**. Give it a name (`db-password`)
 and a value. Tick any **groups** it belongs to, or type a new group name.
-**save** returns to the list; **save and add another** keeps the groups
-ticked and gives you a blank form. The list shows names only; open a
-secret and press **show** to reveal its value (each reveal is recorded in the [audit log](audit-log.md)).
-On a secret's page you can also change its value, rename it, or delete it.
-Deleting a secret also removes every token grant on it.
+To let a token read or write it straight away, tick the tokens and pick
+**read** or **write**. **save** returns to the list; **save and add
+another** keeps the groups ticked and gives you a blank form (the token
+ticks reset). The list shows names only; open a secret and press **show**
+to reveal its value (each reveal is recorded in the
+[audit log](audit-log.md)). On a secret's page you can also change its
+value, rename it, or delete it. Deleting a secret also removes every token grant on it.
 
 ## 2. Create a token for the service
 

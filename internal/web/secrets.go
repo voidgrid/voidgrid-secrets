@@ -54,6 +54,11 @@ type secretNewPage struct {
 	Groups   []model.SecretGroup
 	Ticked   map[int64]bool
 	NewGroup string
+	// Tokens can be given a grant on the new secret; TokenTicked and
+	// Permission refill those choices after a refused submit.
+	Tokens      []model.MachineToken
+	TokenTicked map[int64]bool
+	Permission  string
 }
 
 // ShowNew shows the new-secret form.
@@ -68,7 +73,13 @@ func (h *SecretsHandler) renderNew(w http.ResponseWriter, r *http.Request, statu
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	page.User, page.Groups = &user, groups
+	// An id no secret has lists every usable token.
+	tokens, err := h.tokens.GrantableTo(r.Context(), 0)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	page.User, page.Groups, page.Tokens = &user, groups, tokens
 	render(w, status, "secret_new", page)
 }
 
@@ -94,6 +105,27 @@ func (h *SecretsHandler) SubmitNew(w http.ResponseWriter, r *http.Request) {
 			groupIDs = append(groupIDs, gid)
 		}
 	}
+	tokenTicked := map[int64]bool{}
+	var tokenIDs []int64
+	for _, v := range r.Form["token"] {
+		tid, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid token id", http.StatusBadRequest)
+			return
+		}
+		if !tokenTicked[tid] {
+			tokenTicked[tid] = true
+			tokenIDs = append(tokenIDs, tid)
+		}
+	}
+	permission := r.FormValue("permission")
+	if permission == "" {
+		permission = "read"
+	}
+	if permission != "read" && permission != "write" {
+		http.Error(w, "invalid permission", http.StatusBadRequest)
+		return
+	}
 	name, newGroup := r.FormValue("name"), strings.TrimSpace(r.FormValue("new_group"))
 	created, err := h.secrets.Create(r.Context(), name, []byte(r.FormValue("value")))
 	if err != nil {
@@ -101,7 +133,7 @@ func (h *SecretsHandler) SubmitNew(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, storage.ErrSecretNameTaken) {
 			msg = "a secret with that name already exists"
 		}
-		h.renderNew(w, r, http.StatusBadRequest, secretNewPage{basePage: basePage{Error: msg}, Name: name, Ticked: ticked, NewGroup: newGroup})
+		h.renderNew(w, r, http.StatusBadRequest, secretNewPage{basePage: basePage{Error: msg}, Name: name, Ticked: ticked, NewGroup: newGroup, TokenTicked: tokenTicked, Permission: permission})
 		return
 	}
 	audit.Record(r.Context(), h.audit, audit.Event{
@@ -130,7 +162,7 @@ func (h *SecretsHandler) SubmitNew(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			h.groupFailed(w, r, created.Name, ticked, newGroup, "group names are 1-64 characters, with no control characters")
+			h.addFailed(w, r, created.Name, ticked, newGroup, "group names are 1-64 characters, with no control characters")
 			return
 		}
 		if !ticked[g.ID] {
@@ -142,12 +174,30 @@ func (h *SecretsHandler) SubmitNew(w http.ResponseWriter, r *http.Request) {
 
 	for _, gid := range groupIDs {
 		if err := h.groups.AddMember(r.Context(), gid, created.ID); err != nil {
-			h.groupFailed(w, r, created.Name, ticked, newGroup, "a ticked group no longer exists")
+			h.addFailed(w, r, created.Name, ticked, newGroup, "a ticked group no longer exists")
 			return
 		}
 		audit.Record(r.Context(), h.audit, audit.Event{
 			Actor: audit.User(user.ID), Action: audit.GroupMembers, ResourceType: "group", ResourceID: gid,
 			Details: map[string]string{"added_secret_id": strconv.FormatInt(created.ID, 10)},
+		})
+	}
+
+	for _, tid := range tokenIDs {
+		if err := h.tokens.AddGrant(r.Context(), tid, created.ID, permission, ""); err != nil {
+			why := "could not add a grant"
+			switch {
+			case errors.Is(err, storage.ErrEnvNameTaken):
+				why = "a ticked token already uses " + envname.Derive(created.Name) + " for another secret"
+			case errors.Is(err, storage.ErrNotFound):
+				why = "a ticked token no longer exists"
+			}
+			h.addFailed(w, r, created.Name, ticked, newGroup, why)
+			return
+		}
+		audit.Record(r.Context(), h.audit, audit.Event{
+			Actor: audit.User(user.ID), Action: audit.TokenGrant, ResourceType: "token", ResourceID: tid,
+			Details: map[string]string{"secret_id": strconv.FormatInt(created.ID, 10), "permission": permission, "env_name": ""},
 		})
 	}
 
@@ -158,11 +208,11 @@ func (h *SecretsHandler) SubmitNew(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/secrets", http.StatusSeeOther)
 }
 
-// groupFailed reports a group problem after the secret itself was saved:
-// the secret is kept and the form comes back empty of it.
-func (h *SecretsHandler) groupFailed(w http.ResponseWriter, r *http.Request, saved string, ticked map[int64]bool, newGroup, why string) {
+// addFailed reports a group or grant problem after the secret itself was
+// saved: the secret is kept and the form comes back empty of it.
+func (h *SecretsHandler) addFailed(w http.ResponseWriter, r *http.Request, saved string, ticked map[int64]bool, newGroup, why string) {
 	h.renderNew(w, r, http.StatusBadRequest, secretNewPage{
-		basePage: basePage{Error: "secret " + saved + " was created, but not added to its groups: " + why + " - add it from the group page"},
+		basePage: basePage{Error: "secret " + saved + " was created, but not fully set up: " + why + " - finish from its page, a group page or the token page"},
 		Ticked:   ticked, NewGroup: newGroup,
 	})
 }
