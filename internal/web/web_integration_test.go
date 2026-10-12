@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func newEnv(t *testing.T) env {
 			Users: userRepo, Resets: storage.NewResetRepo(db, rootKey), RecoveryCodes: recoveryCodeRepo, Sessions: sessionRepo,
 			GenerateTOTP: gototp.Generate, ValidateTOTP: gototp.Validate, HashPassword: crypto.HashPassword, Audit: auditRepo,
 		}),
-		Secrets: web.NewSecretsHandler(secretRepo, tokenRepo, auditRepo),
+		Secrets: web.NewSecretsHandler(secretRepo, tokenRepo, groupRepo, auditRepo),
 		Tokens:  web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),
 		Groups:  web.NewGroupsHandler(groupRepo, secretRepo, auditRepo),
 		Audit:   web.NewAuditHandler(auditRepo, tokenRepo),
@@ -183,10 +184,14 @@ func TestWebFullSetupLoginSecretFlow(t *testing.T) {
 	if createRec.Code != http.StatusSeeOther {
 		t.Fatalf("create secret status = %d, body=%s", createRec.Code, createRec.Body.String())
 	}
-	location := createRec.Header().Get("Location")
-	if !strings.HasPrefix(location, "/secrets/") {
-		t.Fatalf("expected redirect to /secrets/{id}, got %q", location)
+	if location := createRec.Header().Get("Location"); location != "/secrets" {
+		t.Fatalf("expected redirect to /secrets, got %q", location)
 	}
+	all, err := e.secrets.List(context.Background())
+	if err != nil || len(all) != 1 {
+		t.Fatalf("List = %v, %v", all, err)
+	}
+	location := "/secrets/" + strconv.FormatInt(all[0].ID, 10)
 
 	// List shows it.
 	listReq := httptest.NewRequest(http.MethodGet, "/secrets", nil)

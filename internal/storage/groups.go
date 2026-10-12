@@ -217,6 +217,25 @@ func (r *GroupRepo) SetMembers(ctx context.Context, id int64, secretIDs []int64)
 	return nil
 }
 
+// AddMember makes one secret a member of a group, leaving the other members
+// alone. Adding an existing member is not an error. An unknown group or
+// secret is refused with ErrGroupNotFound or ErrSecretNotFound.
+func (r *GroupRepo) AddMember(ctx context.Context, id, secretID int64) error {
+	if _, err := r.Get(ctx, id); err != nil {
+		return err
+	}
+	results, err := r.db.write(ctx, []Statement{{
+		Query: `INSERT OR IGNORE INTO secret_group_members (group_id, secret_id) VALUES (?, ?)`, Arguments: []interface{}{id, secretID},
+	}})
+	if err := writeErrAll("add group member", results, err); err != nil {
+		if strings.Contains(err.Error(), "FOREIGN KEY") {
+			return ErrSecretNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 // writeErrAll is writeErr for multi-statement writes: it reports the first
 // failing statement.
 func writeErrAll(what string, results []WriteResult, err error) error {

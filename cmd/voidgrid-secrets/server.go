@@ -127,7 +127,7 @@ func runServer(cfg config.Config) error {
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
 		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, wizard, auditRepo),
 		Recover:      web.NewRecoverHandler(recoveryService),
-		Secrets:      web.NewSecretsHandler(secretRepo, tokenRepo, auditRepo),
+		Secrets:      web.NewSecretsHandler(secretRepo, tokenRepo, groupRepo, auditRepo),
 		Tokens:       web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),
 		Groups:       web.NewGroupsHandler(groupRepo, secretRepo, auditRepo),
 		Audit:        web.NewAuditHandler(auditRepo, tokenRepo),

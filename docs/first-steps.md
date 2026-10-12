@@ -6,8 +6,10 @@ all the way to a container using it.
 ## 1. Add a secret
 
 Go to **secrets** and choose **new secret**. Give it a name (`db-password`)
-and a value. The list shows names only; open a secret and press **show** to
-reveal its value (each reveal is recorded in the [audit log](audit-log.md)).
+and a value. Tick any **groups** it belongs to, or type a new group name.
+**save** returns to the list; **save and add another** keeps the groups
+ticked and gives you a blank form. The list shows names only; open a
+secret and press **show** to reveal its value (each reveal is recorded in the [audit log](audit-log.md)).
 On a secret's page you can also change its value, rename it, or delete it.
 Deleting a secret also removes every token grant on it.
 
@@ -44,8 +46,8 @@ If several tokens need the same handful of secrets, make a **group** (the
 **groups** page) and tick its secrets. On a token's page, each group appears
 as a quick-select checkbox: ticking it ticks all the group's secrets, and you
 can still untick any of them before saving. A secret can be in several
-groups. Groups only help you tick things in the web UI. Grants, tokens and
-the API never refer to them, so changing or deleting a group changes no
+groups, and you can set them when you add the secret. Groups only help you
+tick things in the web UI. Grants, tokens and the API never refer to them, so changing or deleting a group changes no
 access.
 
 ## 4. Use it from a container

@@ -232,3 +232,69 @@ func TestWebSecretPageAddsItToATokenOnlyOnce(t *testing.T) {
 		t.Fatalf("grant audit entries = %d, want 1", len(entries))
 	}
 }
+
+func TestWebNewSecretGroupsAndAddAnother(t *testing.T) {
+	e := newEnv(t)
+	completeSetupDirect(t, e)
+	cookie := ownerSession(t, e)
+	ctx := context.Background()
+	arr, err := e.groups.Create(ctx, "arr")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := get(t, e, "/secrets/new", cookie); !strings.Contains(rec.Body.String(), `name="group" value="`+idStr(arr.ID)+`"`) || !strings.Contains(rec.Body.String(), `value="another"`) {
+		t.Fatalf("form lacks the group box or the add-another button: %s", rec.Body.String())
+	}
+
+	// Save and add another: stays on the form, flashes, keeps the tick.
+	rec := doForm(t, e.handler, "/secrets/new", url.Values{
+		"name": {"one"}, "value": {"v"}, "group": {idStr(arr.ID)}, "action": {"another"},
+	}, cookie)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "created one") || !strings.Contains(body, `value="`+idStr(arr.ID)+`" checked`) {
+		t.Fatalf("add another: status=%d body=%s", rec.Code, body)
+	}
+
+	// Save with a new group, plus the ticked one: back to the list.
+	rec = doForm(t, e.handler, "/secrets/new", url.Values{
+		"name": {"two"}, "value": {"v"}, "group": {idStr(arr.ID)}, "new_group": {" fresh "}, "action": {"save"},
+	}, cookie)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/secrets" {
+		t.Fatalf("save: status=%d location=%q", rec.Code, rec.Header().Get("Location"))
+	}
+	groups, _ := e.groups.List(ctx)
+	byName := map[string]int{}
+	for _, g := range groups {
+		byName[g.Name] = len(g.SecretIDs)
+	}
+	if byName["arr"] != 2 || byName["fresh"] != 1 {
+		t.Fatalf("members by group = %v, want arr=2 fresh=1", byName)
+	}
+
+	// A new group named like an existing one (any case) reuses it.
+	doForm(t, e.handler, "/secrets/new", url.Values{"name": {"three"}, "value": {"v"}, "new_group": {"ARR"}}, cookie)
+	if got, _ := e.groups.Get(ctx, arr.ID); len(got.SecretIDs) != 3 {
+		t.Fatalf("arr members = %v, want 3", got.SecretIDs)
+	}
+
+	// A duplicate name is still refused and adds nothing.
+	rec = doForm(t, e.handler, "/secrets/new", url.Values{"name": {"one"}, "value": {"v"}, "group": {idStr(arr.ID)}}, cookie)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "already exists") {
+		t.Fatalf("duplicate: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// An invalid new-group name keeps the secret and says so.
+	rec = doForm(t, e.handler, "/secrets/new", url.Values{"name": {"four"}, "value": {"v"}, "new_group": {strings.Repeat("x", 65)}}, cookie)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "four was created") {
+		t.Fatalf("invalid group: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	all, _ := e.secrets.List(ctx)
+	found := false
+	for _, s := range all {
+		found = found || s.Name == "four"
+	}
+	if !found {
+		t.Fatal("secret four should exist")
+	}
+}

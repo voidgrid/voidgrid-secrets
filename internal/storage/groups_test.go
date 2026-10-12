@@ -119,3 +119,28 @@ func TestGroupMembersAreSetAtomicallyAndFollowSecrets(t *testing.T) {
 		t.Fatalf("List after deletes = %+v, %v", all, err)
 	}
 }
+
+func TestGroupAddMemberKeepsTheOthers(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewGroupRepo(db)
+	a, b := createTestSecret(t, db, "a"), createTestSecret(t, db, "b")
+	g, err := repo.Create(ctx, "arr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{a.ID, b.ID, b.ID} {
+		if err := repo.AddMember(ctx, g.ID, id); err != nil {
+			t.Fatalf("AddMember(%d): %v", id, err)
+		}
+	}
+	if got, _ := repo.Get(ctx, g.ID); !reflect.DeepEqual(got.SecretIDs, []int64{a.ID, b.ID}) {
+		t.Fatalf("members = %v", got.SecretIDs)
+	}
+	if err := repo.AddMember(ctx, g.ID, 9999); !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("unknown secret: %v", err)
+	}
+	if err := repo.AddMember(ctx, 9999, a.ID); !errors.Is(err, storage.ErrGroupNotFound) {
+		t.Fatalf("unknown group: %v", err)
+	}
+}
