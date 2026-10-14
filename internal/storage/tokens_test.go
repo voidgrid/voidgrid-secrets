@@ -305,3 +305,26 @@ func TestGrantableToHidesGrantedRevokedAndExpiredTokens(t *testing.T) {
 		t.Fatalf("grantable = %v, want %v (not granted %d, revoked %d, expired %d)", ids, want, granted.ID, revoked.ID, expired.ID)
 	}
 }
+
+func TestProvisioningFlagIsStoredAndReadBack(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewTokenRepo(db)
+
+	plain, mt, err := repo.Create(ctx, "plain", nil)
+	if err != nil || mt.Provision {
+		t.Fatalf("Create = %+v, %v; want Provision=false", mt, err)
+	}
+	plaintext, mt, err := repo.CreateWith(ctx, "loader", nil, true)
+	if err != nil || !mt.Provision {
+		t.Fatalf("CreateWith = %+v, %v; want Provision=true", mt, err)
+	}
+	got, _, err := repo.Authenticate(ctx, plaintext)
+	if err != nil || !got.Provision {
+		t.Fatalf("Authenticate = %+v, %v; want Provision=true", got, err)
+	}
+	got, _, err = repo.Authenticate(ctx, plain)
+	if err != nil || got.Provision {
+		t.Fatalf("Authenticate plain = %+v, %v; want Provision=false", got, err)
+	}
+}

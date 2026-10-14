@@ -96,18 +96,57 @@ func (db *DB) appliedMigrations(ctx context.Context) (map[string]bool, error) {
 }
 
 // splitStatements splits a migration file's contents into individual SQL
-// statements on "statement;" boundaries. This is intentionally simple:
-// migration files are authored by project maintainers, not generated from
-// untrusted input, so a naive split is sufficient as long as no statement
-// embeds a literal semicolon inside a string value.
+// statements on ";" boundaries, skipping any ";" inside a "--" or "/* */"
+// comment, a 'string' or a "quoted identifier". Comments are dropped, and
+// so is any fragment with no SQL in it, so a comment can say anything.
+// CREATE TRIGGER bodies (BEGIN ... END with inner semicolons) are not
+// supported; no migration uses one.
 func splitStatements(sql string) []string {
-	parts := strings.Split(sql, ";")
-	statements := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			statements = append(statements, p)
+	var (
+		statements []string
+		cur        strings.Builder
+	)
+	flush := func() {
+		if stmt := strings.TrimSpace(cur.String()); stmt != "" {
+			statements = append(statements, stmt)
+		}
+		cur.Reset()
+	}
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+		switch {
+		case c == '-' && i+1 < len(sql) && sql[i+1] == '-':
+			for i < len(sql) && sql[i] != '\n' {
+				i++
+			}
+			cur.WriteByte('\n')
+		case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			end := strings.Index(sql[i+2:], "*/")
+			if end < 0 {
+				i = len(sql)
+			} else {
+				i += 2 + end + 1
+			}
+			cur.WriteByte(' ')
+		case c == '\'' || c == '"':
+			cur.WriteByte(c)
+			for i++; i < len(sql); i++ {
+				cur.WriteByte(sql[i])
+				if sql[i] == c {
+					if i+1 < len(sql) && sql[i+1] == c { // doubled quote is an escape
+						i++
+						cur.WriteByte(c)
+						continue
+					}
+					break
+				}
+			}
+		case c == ';':
+			flush()
+		default:
+			cur.WriteByte(c)
 		}
 	}
+	flush()
 	return statements
 }

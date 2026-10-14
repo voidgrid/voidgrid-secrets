@@ -366,5 +366,14 @@ secret the token may read with its environment variable name, and
 `GET /api/v1/secrets/{id}` returns one secret, both with
 `Authorization: Bearer <token>`.
 
+To load keys from a script, create a **provisioning** token (tick
+"provisioning" when creating it, or send `"provision": true` to
+`POST /api/v1/tokens`). It can `GET /api/v1/secrets` (names and metadata,
+never values) and `POST /api/v1/secrets` with `{"name": "...", "value":
+"..."}`. It is create-only: an existing name is refused with 409, and it
+can't reveal, update, rename or delete a secret, or grant one to a token -
+you assign the new secrets to tokens in the web UI. Keep it only on the
+machine that runs the script, and revoke it when you're done.
+
 The full API is documented by the running instance itself: interactive
 docs at `/docs`, the OpenAPI 3.1 spec at `/openapi.json`.

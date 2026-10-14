@@ -53,8 +53,31 @@ function syncGroups() {
   });
 }
 
+// The header checkbox on the grant table ticks or unticks every secret;
+// it shows ticked when all are, partly ticked when only some are.
+function syncSelectAll() {
+  const all = document.querySelector("[data-select-all]");
+  if (!all) {
+    return;
+  }
+  const boxes = document.querySelectorAll("[data-secret]");
+  const on = Array.from(boxes).filter((b) => b.checked).length;
+  all.checked = boxes.length > 0 && on === boxes.length;
+  all.indeterminate = on > 0 && on < boxes.length;
+}
+
 document.addEventListener("change", (event) => {
   const box = event.target;
+  if (box.matches("[data-select-all]")) {
+    document.querySelectorAll("[data-secret]").forEach((b) => {
+      b.checked = box.checked;
+    });
+    box.indeterminate = false;
+    syncGroups();
+  }
+  if (box.matches("[data-secret], [data-group-members]")) {
+    syncSelectAll();
+  }
   if (box.matches("[data-group-members]")) {
     box.dataset.groupMembers.split(",").filter(Boolean).forEach((id) => {
       const secret = document.querySelector('[data-secret="' + id + '"]');
@@ -69,7 +92,10 @@ document.addEventListener("change", (event) => {
   }
 });
 
-document.addEventListener("DOMContentLoaded", syncGroups);
+document.addEventListener("DOMContentLoaded", () => {
+  syncGroups();
+  syncSelectAll();
+});
 
 document.addEventListener("submit", (event) => {
   const message = event.target.dataset.confirm;

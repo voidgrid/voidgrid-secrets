@@ -45,11 +45,11 @@ func toSecretMetadata(s model.Secret) SecretMetadata {
 func RegisterSecrets(api huma.API, h *SecretsHandler) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-secrets", Method: "GET", Path: "/secrets",
-		Summary: "List secrets (names and metadata, never values). Session only.", Tags: []string{"secrets"},
+		Summary: "List secrets (names and metadata, never values). Session or provisioning token.", Tags: []string{"secrets"},
 	}, h.List)
 	huma.Register(api, huma.Operation{
 		OperationID: "create-secret", Method: "POST", Path: "/secrets",
-		Summary: "Create a secret. Session only.", Tags: []string{"secrets"},
+		Summary: "Create a secret. Session or provisioning token; an existing name is a 409, never an overwrite.", Tags: []string{"secrets"},
 	}, h.Create)
 	huma.Register(api, huma.Operation{
 		OperationID: "get-secret-metadata", Method: "GET", Path: "/secrets/{id}/metadata",
@@ -82,7 +82,7 @@ type ListSecretsOutput struct {
 
 // List returns every secret's metadata.
 func (h *SecretsHandler) List(ctx context.Context, _ *EmptyInput) (*ListSecretsOutput, error) {
-	if err := requireSession(ctx); err != nil {
+	if err := requireSessionOrProvision(ctx); err != nil {
 		return nil, err
 	}
 	secrets, err := h.repo.List(ctx)
@@ -112,7 +112,7 @@ type SecretOutput struct {
 
 // Create stores a new secret.
 func (h *SecretsHandler) Create(ctx context.Context, in *CreateSecretInput) (*SecretOutput, error) {
-	if err := requireSession(ctx); err != nil {
+	if err := requireSessionOrProvision(ctx); err != nil {
 		return nil, err
 	}
 	s, err := h.repo.Create(ctx, in.Body.Name, []byte(in.Body.Value))
@@ -267,6 +267,19 @@ func requireSession(ctx context.Context) error {
 		return nil
 	}
 	return huma.Error403Forbidden("only the signed-in account can do this, not a machine token")
+}
+
+// requireSessionOrProvision admits the signed-in account or a machine token
+// flagged for provisioning, which may list and create secrets but nothing
+// else.
+func requireSessionOrProvision(ctx context.Context) error {
+	if _, ok := gosession.FromContext(ctx); ok {
+		return nil
+	}
+	if mt, _, ok := token.FromContext(ctx); ok && mt.Provision {
+		return nil
+	}
+	return huma.Error403Forbidden("only the signed-in account or a provisioning token can do this")
 }
 
 func notFoundOr500(err error) error {

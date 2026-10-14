@@ -12,6 +12,8 @@ type MachineToken struct {
 	ExpiresAt   *time.Time
 	RevokedAt   *time.Time
 	LastUsedAt  *time.Time
+	// Provision lets the token list and create secrets (create only).
+	Provision bool
 }
 
 // TokenGrant gives a machine token a permission on one secret.

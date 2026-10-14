@@ -5,7 +5,7 @@
     {{range .Tokens}}
     <tr>
         <td><a href="/tokens/{{.ID}}">{{.ID}}</a></td>
-        <td><a href="/tokens/{{.ID}}">{{.Description}}</a></td>
+        <td><a href="/tokens/{{.ID}}">{{.Description}}</a>{{if .Provision}} <span class="muted">[provisioning]</span>{{end}}</td>
         <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
         <td>{{if .ExpiresAt}}{{.ExpiresAt.Format "2006-01-02 15:04"}}{{end}}</td>
         <td>{{if .RevokedAt}}yes{{end}}</td>
@@ -26,6 +26,7 @@
     <label>description
         <input type="text" name="description">
     </label>
+    <label class="check"><input type="checkbox" name="provision" value="1"> provisioning: may list and create secrets over the API (create only)</label>
     <button type="submit">create</button>
 </form>
 {{if .NewToken}}

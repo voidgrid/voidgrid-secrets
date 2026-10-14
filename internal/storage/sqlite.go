@@ -110,13 +110,26 @@ func (db *DB) write(ctx context.Context, stmts []Statement) ([]WriteResult, erro
 			_ = tx.Rollback()
 			return results, nil
 		}
-		results[i].RowsAffected, _ = res.RowsAffected()
-		results[i].LastInsertID, _ = res.LastInsertId()
+		results[i].RowsAffected, results[i].LastInsertID = resultCounts(res)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return results, nil
+}
+
+// resultCounts reads a write's counts. For text that holds no statement (a
+// lone comment) the driver returns a result wrapping nil, and reading it
+// panics, so that case reports zeros instead.
+func resultCounts(res sql.Result) (rows, lastID int64) {
+	defer func() {
+		if recover() != nil {
+			rows, lastID = 0, 0
+		}
+	}()
+	rows, _ = res.RowsAffected()
+	lastID, _ = res.LastInsertId()
+	return rows, lastID
 }
 
 // QueryResult holds a query's rows, fully read, so nothing is left open

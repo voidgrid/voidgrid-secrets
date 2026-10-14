@@ -213,3 +213,78 @@ func TestUngrantOverAPI(t *testing.T) {
 		t.Fatalf("audit entries = %+v, %v", entries, err)
 	}
 }
+
+// A provisioning token lists and creates secrets and nothing more; a
+// plain token still can't, and creating never overwrites.
+func TestProvisioningTokenCreatesButNothingElse(t *testing.T) {
+	e := newEnv(t, true)
+	ctx := context.Background()
+	existing, err := e.secrets.Create(ctx, "existing", []byte("original"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov, _, err := e.tokens.CreateWith(ctx, "loader", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _, err := e.tokens.Create(ctx, "plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := bearerRequest(t, e, "POST", "/api/v1/secrets", `{"name":"fresh","value":"v1"}`, prov)
+	if rec.Code != 200 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var created struct{ ID int64 }
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil || created.ID == 0 {
+		t.Fatalf("create body = %s, %v", rec.Body.String(), err)
+	}
+	if rec := bearerRequest(t, e, "GET", "/api/v1/secrets", "", prov); rec.Code != 200 || !strings.Contains(rec.Body.String(), "fresh") {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+	}
+
+	cases := []struct {
+		name, method, path, body, token string
+		want                            int
+	}{
+		{"overwrite by name", "POST", "/api/v1/secrets", `{"name":"existing","value":"x"}`, prov, 409},
+		{"plain token create", "POST", "/api/v1/secrets", `{"name":"n2","value":"v"}`, plain, 403},
+		{"plain token list", "GET", "/api/v1/secrets", "", plain, 403},
+		{"reveal", "GET", fmt.Sprintf("/api/v1/secrets/%d", existing.ID), "", prov, 403},
+		{"reveal own creation", "GET", fmt.Sprintf("/api/v1/secrets/%d", created.ID), "", prov, 403},
+		{"update", "PUT", fmt.Sprintf("/api/v1/secrets/%d", existing.ID), `{"value":"x"}`, prov, 403},
+		{"rename", "PUT", fmt.Sprintf("/api/v1/secrets/%d/name", existing.ID), `{"name":"r"}`, prov, 403},
+		{"delete", "DELETE", fmt.Sprintf("/api/v1/secrets/%d", existing.ID), "", prov, 403},
+		{"manage tokens", "GET", "/api/v1/tokens", "", prov, 401},
+		{"grant", "POST", "/api/v1/tokens/1/grants", fmt.Sprintf(`{"secret_id":%d,"permission":"read"}`, existing.ID), prov, 401},
+	}
+	for _, c := range cases {
+		if rec := bearerRequest(t, e, c.method, c.path, c.body, c.token); rec.Code != c.want {
+			t.Errorf("%s: status = %d, want %d; body=%s", c.name, rec.Code, c.want, rec.Body.String())
+		}
+	}
+	if v, err := e.secrets.Reveal(ctx, existing.ID); err != nil || string(v) != "original" {
+		t.Fatalf("existing value = %q, %v; want unchanged", v, err)
+	}
+}
+
+// The account can mint a provisioning token over the API.
+func TestCreateProvisioningTokenViaAPI(t *testing.T) {
+	e := newEnv(t, true)
+	cookie := ownerCookie(t, e)
+	rec := doJSON(t, e.handler, "POST", "/api/v1/tokens", `{"description":"loader","provision":true}`, cookie)
+	if rec.Code != 200 {
+		t.Fatalf("create token: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Token    string
+		Metadata struct{ Provision bool }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || !out.Metadata.Provision || out.Token == "" {
+		t.Fatalf("body = %s, %v", rec.Body.String(), err)
+	}
+	if rec := bearerRequest(t, e, "POST", "/api/v1/secrets", `{"name":"via-api","value":"v"}`, out.Token); rec.Code != 200 {
+		t.Fatalf("create with minted token: %d %s", rec.Code, rec.Body.String())
+	}
+}

@@ -10,7 +10,7 @@
     <p>{{range .Groups}}<label class="check"><input type="checkbox" data-group-members="{{.Members}}"> {{.Name}} ({{.Count}})</label>{{end}}</p>
     {{end}}
     <table>
-        <tr><th></th><th>secret</th><th>permission</th><th>environment variable</th></tr>
+        <tr><th><input type="checkbox" data-select-all aria-label="select all secrets"></th><th>secret</th><th>permission</th><th>environment variable</th></tr>
         {{range .Rows}}
         <tr>
             <td><input type="checkbox" name="secret" value="{{.SecretID}}" data-secret="{{.SecretID}}"{{if .Checked}} checked{{end}} aria-label="allow {{.Name}}"></td>

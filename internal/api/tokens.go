@@ -71,12 +71,13 @@ type MachineTokenOut struct {
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	Provision   bool       `json:"provision" doc:"A provisioning token may list and create secrets (create only; an existing name is a 409). It can't reveal, update, rename, delete or grant."`
 }
 
 func toMachineTokenOut(mt model.MachineToken) MachineTokenOut {
 	return MachineTokenOut{
 		ID: mt.ID, Description: mt.Description, CreatedAt: mt.CreatedAt,
-		ExpiresAt: mt.ExpiresAt, RevokedAt: mt.RevokedAt, LastUsedAt: mt.LastUsedAt,
+		ExpiresAt: mt.ExpiresAt, RevokedAt: mt.RevokedAt, LastUsedAt: mt.LastUsedAt, Provision: mt.Provision,
 	}
 }
 
@@ -106,6 +107,7 @@ type CreateTokenInput struct {
 	Body struct {
 		Description string     `json:"description"`
 		ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+		Provision   bool       `json:"provision,omitempty" doc:"Let the token list and create secrets (create only). For scripts that load keys; assigning them to tokens stays with the account."`
 	}
 }
 
@@ -119,11 +121,14 @@ type CreateTokenOutput struct {
 
 // Create makes a new machine token.
 func (h *TokensHandler) Create(ctx context.Context, in *CreateTokenInput) (*CreateTokenOutput, error) {
-	plaintext, mt, err := h.tokens.Create(ctx, in.Body.Description, in.Body.ExpiresAt)
+	plaintext, mt, err := h.tokens.CreateWith(ctx, in.Body.Description, in.Body.ExpiresAt, in.Body.Provision)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("internal error", err)
 	}
 	details := map[string]string{"description": mt.Description}
+	if mt.Provision {
+		details["provision"] = "true"
+	}
 	if mt.ExpiresAt != nil {
 		details["expires_at"] = mt.ExpiresAt.UTC().Format(time.RFC3339)
 	}

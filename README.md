@@ -112,3 +112,17 @@ anything is still `CHANGEME`.
 
 Build/test/lint output is logged in full under `.dev/logs/` (gitignored);
 only a short pass/fail result prints to the terminal.
+
+### Migrations
+
+Schema changes are numbered SQL files in `migrations/` (`0003_name.sql`),
+applied in order at startup, each in one transaction together with its
+`schema_migrations` row. A failed migration rolls back and the server
+refuses to start.
+
+Statements are split on `;`, skipping comments and quoted text, so a
+comment can say anything. **`CREATE TRIGGER` is not supported**: a trigger
+body ends each of its statements with `;`, so the split cuts it short and
+the migration fails with `incomplete input`. Nothing uses triggers; keep
+that logic in Go. The test suite runs every migration, so this shows up as
+a failing test, never in production.

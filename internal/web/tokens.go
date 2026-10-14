@@ -59,14 +59,18 @@ func (h *TokensHandler) SubmitCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	plaintext, mt, err := h.tokens.Create(r.Context(), r.FormValue("description"), nil)
+	plaintext, mt, err := h.tokens.CreateWith(r.Context(), r.FormValue("description"), nil, r.FormValue("provision") != "")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	details := map[string]string{"description": mt.Description}
+	if mt.Provision {
+		details["provision"] = "true"
+	}
 	audit.Record(r.Context(), h.audit, audit.Event{
 		Actor: audit.User(user.ID), Action: audit.TokenCreate, ResourceType: "token", ResourceID: mt.ID,
-		Details: map[string]string{"description": mt.Description},
+		Details: details,
 	})
 	h.renderList(w, r, user, plaintext, mt.ID)
 }

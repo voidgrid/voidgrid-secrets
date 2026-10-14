@@ -35,19 +35,25 @@ func NewTokenRepo(db *DB) *TokenRepo {
 	return &TokenRepo{db: db}
 }
 
-const tokenColumns = `id, description, created_at, expires_at, revoked_at, last_used_at`
+const tokenColumns = `id, description, created_at, expires_at, revoked_at, last_used_at, provision`
 
 // Create generates a new machine token, stores only its hash, and returns
 // the plaintext token (shown to the caller exactly once) with its stored
 // metadata.
 func (r *TokenRepo) Create(ctx context.Context, description string, expiresAt *time.Time) (plaintext string, mt model.MachineToken, err error) {
+	return r.CreateWith(ctx, description, expiresAt, false)
+}
+
+// CreateWith is Create with the provisioning flag: a provisioning token
+// may list and create secrets over the API.
+func (r *TokenRepo) CreateWith(ctx context.Context, description string, expiresAt *time.Time, provision bool) (plaintext string, mt model.MachineToken, err error) {
 	plaintext, err = token.Generate()
 	if err != nil {
 		return "", model.MachineToken{}, err
 	}
 	results, err := r.db.write(ctx, []Statement{{
-		Query:     `INSERT INTO machine_tokens (token_hash, description, expires_at, created_at) VALUES (?, ?, ?, ?)`,
-		Arguments: []interface{}{crypto.HashToken(plaintext), description, timeOrNil(expiresAt), nowTimestamp()},
+		Query:     `INSERT INTO machine_tokens (token_hash, description, expires_at, created_at, provision) VALUES (?, ?, ?, ?, ?)`,
+		Arguments: []interface{}{crypto.HashToken(plaintext), description, timeOrNil(expiresAt), nowTimestamp(), provision},
 	}})
 	if err := writeErr("create machine token", results, err); err != nil {
 		return "", model.MachineToken{}, err
@@ -462,10 +468,12 @@ func scanMachineToken(qr *QueryResult) (model.MachineToken, error) {
 		mt                               model.MachineToken
 		createdAtRaw                     string
 		expiresAt, revokedAt, lastUsedAt sql.NullString
+		provision                        int64
 	)
-	if err := qr.Scan(&mt.ID, &mt.Description, &createdAtRaw, &expiresAt, &revokedAt, &lastUsedAt); err != nil {
+	if err := qr.Scan(&mt.ID, &mt.Description, &createdAtRaw, &expiresAt, &revokedAt, &lastUsedAt, &provision); err != nil {
 		return model.MachineToken{}, fmt.Errorf("storage: scan token: %w", err)
 	}
+	mt.Provision = provision != 0
 	var err error
 	if mt.CreatedAt, err = parseTimestamp(createdAtRaw); err != nil {
 		return model.MachineToken{}, fmt.Errorf("storage: parse token created_at: %w", err)
