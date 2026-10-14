@@ -42,6 +42,11 @@ const (
 	RecoveryCompleted = "recovery_completed"
 	BreakGlassIssued  = "break_glass_issued"
 
+	// Re-authentication of the signed-in account before a sensitive change.
+	Reauth                   = "reauth"
+	ReauthFailed             = "reauth_failed"
+	RecoveryCodesRegenerated = "recovery_codes_regenerated"
+
 	SecretCreate = "secret_create"
 	SecretUpdate = "secret_update"
 	SecretRename = "secret_rename"

@@ -1,0 +1,22 @@
+{{define "content"}}
+<h1>account</h1>
+<p class="muted">{{.User.Username}} - signs in with {{if eq .AuthMethod "oidc"}}OIDC{{else}}password and TOTP{{end}}</p>
+
+<h2>recovery codes</h2>
+<p>{{.Unused}} unused. If you lose your {{if eq .AuthMethod "oidc"}}OIDC provider{{else}}password or authenticator{{end}}, one of these starts an account reset at /recover.</p>
+{{if eq .AuthMethod "oidc"}}
+<p class="muted">New codes replace the whole set: every old code stops working. You'll sign in at your provider again first, and the codes are shown once.</p>
+<p><a href="/account/recovery-codes/oidc">sign in again and get new codes</a></p>
+{{else}}
+<form class="stack" method="post" action="/account/recovery-codes" data-confirm="Replace all recovery codes? The old ones stop working.">
+    <p class="muted">New codes replace the whole set: every old code stops working. Confirm it's you first. The codes are shown once.</p>
+    <label>password
+        <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <label>TOTP code
+        <input type="text" name="totp_code" inputmode="numeric" autocomplete="one-time-code" required>
+    </label>
+    <button type="submit">get new codes</button>
+</form>
+{{end}}
+{{end}}

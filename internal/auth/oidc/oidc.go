@@ -16,6 +16,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/zitadel/oidc/v3/pkg/client/rp"
 	httphelper "github.com/zitadel/oidc/v3/pkg/http"
@@ -77,6 +79,46 @@ func State() string {
 // that always fails to validate state/PKCE.
 func (c *Client) LoginHandler() http.HandlerFunc {
 	return rp.AuthURLHandler(State, c.rp)
+}
+
+// ReauthStatePrefix starts the state value of a re-authentication flow, so
+// the callback can tell it from a sign-in. The state is tied to the
+// browser that started the flow by the same cookie sign-in uses.
+const ReauthStatePrefix = "reauth."
+
+// IsReauthState reports whether state belongs to a re-authentication flow.
+func IsReauthState(state string) bool {
+	return strings.HasPrefix(state, ReauthStatePrefix)
+}
+
+// Identity is a verified provider identity handed to the callback.
+type Identity struct {
+	Subject           string
+	PreferredUsername string
+	State             string
+	// AuthTime is when the provider says the user last authenticated, zero
+	// if the ID token carries no auth_time.
+	AuthTime time.Time
+}
+
+// ReauthLoginHandler starts the auth-code flow like LoginHandler, but asks
+// the provider to prompt for credentials again (prompt=login, max_age=0)
+// and marks the state so the callback treats it as a re-authentication.
+func (c *Client) ReauthLoginHandler() http.HandlerFunc {
+	return rp.AuthURLHandler(func() string { return ReauthStatePrefix + State() }, c.rp,
+		rp.WithPromptURLParam("login"), rp.WithURLParam("max_age", "0"))
+}
+
+// IdentityCallbackHandler is CallbackHandler with the full verified
+// identity (state and auth_time included).
+func (c *Client) IdentityCallbackHandler(onIdentity func(w http.ResponseWriter, r *http.Request, id Identity)) http.HandlerFunc {
+	return rp.CodeExchangeHandler(func(w http.ResponseWriter, r *http.Request, tokens *oidc.Tokens[*oidc.IDTokenClaims], state string, relyingParty rp.RelyingParty) {
+		claims := tokens.IDTokenClaims
+		onIdentity(w, r, Identity{
+			Subject: claims.Subject, PreferredUsername: claims.PreferredUsername,
+			State: state, AuthTime: claims.GetAuthTime(),
+		})
+	}, c.rp)
 }
 
 // CallbackHandler returns an http.HandlerFunc for the OIDC provider's

@@ -75,6 +75,23 @@ Recovery codes:
 - Each works once. Only hashes are stored; nobody can retrieve them.
 - They're accepted in any case, with or without the hyphens.
 
+### Getting a new set
+
+Signed in, open **account** in the top bar to see how many codes you have
+left and to replace them. You prove it's you first:
+
+- **Password account:** enter your password and a current authenticator
+  code. Wrong answers count toward the same lockout as sign-in (see
+  [Failed attempts](#failed-attempts)).
+- **OIDC account:** you're sent to your provider to sign in again
+  (`prompt=login`, `max_age=0`) and must come back as the same identity.
+  The provider has to report a sign-in from the last two minutes
+  (`auth_time`); if it doesn't, no codes are issued.
+
+The new set replaces the old one: every old code stops working at once,
+and the new ones are shown once. It's recorded in the
+[audit log](audit-log.md).
+
 ### Break-glass: when the recovery codes are gone too
 
 Run this inside the server's container:

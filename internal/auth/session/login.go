@@ -127,6 +127,26 @@ func (s *LoginService) Login(ctx context.Context, username, password, totpCode s
 }
 
 func (s *LoginService) login(ctx context.Context, username, password, totpCode string) attempt {
+	a := s.check(ctx, username, password, totpCode)
+	if a.err != nil {
+		return a
+	}
+	return s.newSession(ctx, a.userID)
+}
+
+// Reauth re-checks the signed-in account's password and a fresh TOTP code
+// before a sensitive change. It shares Login's failure throttle, so
+// guesses here count against the same lockout, and records the outcome in
+// the audit log. It creates no session.
+func (s *LoginService) Reauth(ctx context.Context, username, password, totpCode string) error {
+	_, _, err := s.limited(ctx, username, "password", audit.Reauth, audit.ReauthFailed, func() attempt {
+		return s.check(ctx, username, password, totpCode)
+	})
+	return err
+}
+
+// check verifies password and TOTP code, with no session on success.
+func (s *LoginService) check(ctx context.Context, username, password, totpCode string) attempt {
 	rec, err := s.Users.GetAuthRecord(ctx, username)
 	// OIDC-only users (or any other method), disabled accounts and users
 	// without a password can't use this flow - but the password is still
@@ -171,7 +191,7 @@ func (s *LoginService) login(ctx context.Context, username, password, totpCode s
 		return failed(rec.ID, "TOTP code already used")
 	}
 
-	return s.newSession(ctx, rec.ID)
+	return attempt{userID: rec.ID}
 }
 
 func (s *LoginService) newSession(ctx context.Context, userID int64) attempt {

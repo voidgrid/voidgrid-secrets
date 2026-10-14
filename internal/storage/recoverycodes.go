@@ -71,3 +71,23 @@ func (r *RecoveryCodeRepo) Consume(ctx context.Context, userID int64, codeHash s
 	}
 	return results[0].RowsAffected == 1, nil
 }
+
+// CountUnused returns how many of userID's recovery codes are still
+// unused.
+func (r *RecoveryCodeRepo) CountUnused(ctx context.Context, userID int64) (int, error) {
+	qr, err := r.db.queryOne(ctx, Statement{
+		Query:     `SELECT count(*) FROM recovery_codes WHERE user_id = ? AND used_at IS NULL`,
+		Arguments: []interface{}{userID},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("storage: count recovery codes for user %d: %w", userID, err)
+	}
+	var n int
+	if !qr.Next() {
+		return 0, nil
+	}
+	if err := qr.Scan(&n); err != nil {
+		return 0, fmt.Errorf("storage: count recovery codes for user %d: %w", userID, err)
+	}
+	return n, nil
+}

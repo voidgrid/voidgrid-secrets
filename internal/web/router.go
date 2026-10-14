@@ -20,12 +20,17 @@ type Deps struct {
 	Tokens       *TokensHandler
 	Groups       *GroupsHandler
 	Audit        *AuditHandler
+	Account      *AccountHandler
 }
 
 // NewRouter builds the web UI's router: the setup wizard (reachable only
 // while setup is incomplete), sign-in and recovery (only once it's
 // complete), and everything else behind the account's session.
 func NewRouter(deps Deps) http.Handler {
+	if deps.Account != nil {
+		deps.Auth.reauth = deps.Account.FinishOIDCReauth
+	}
+
 	r := chi.NewMux()
 	r.Use(securityHeaders)
 
@@ -87,6 +92,10 @@ func NewRouter(deps Deps) http.Handler {
 			r.Post("/groups/{id}/members", deps.Groups.SubmitMembers)
 
 			r.Get("/audit", deps.Audit.List)
+
+			r.Get("/account", deps.Account.Show)
+			r.Post("/account/recovery-codes", deps.Account.SubmitRegenerate)
+			r.Get("/account/recovery-codes/oidc", deps.Account.StartOIDCReauth)
 		})
 	})
 

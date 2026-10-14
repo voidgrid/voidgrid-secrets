@@ -43,6 +43,9 @@ type AuthHandler struct {
 	owner        OIDCOwnerChecker
 	wizard       *setup.Wizard
 	audit        audit.Logger
+	// reauth handles a callback that finishes a re-authentication (see
+	// AccountHandler) instead of a sign-in; set by NewRouter.
+	reauth func(w http.ResponseWriter, r *http.Request, id oidcclient.Identity)
 }
 
 // NewAuthHandler returns an AuthHandler backed by the given dependencies.
@@ -140,7 +143,17 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=oidc_unavailable", http.StatusSeeOther)
 		return
 	}
-	client.CallbackHandler(h.onIdentity)(w, r)
+	client.IdentityCallbackHandler(func(w http.ResponseWriter, r *http.Request, id oidcclient.Identity) {
+		if oidcclient.IsReauthState(id.State) {
+			if h.reauth == nil {
+				http.Error(w, "re-authentication isn't available", http.StatusNotFound)
+				return
+			}
+			h.reauth(w, r, id)
+			return
+		}
+		h.onIdentity(w, r, id.Subject, id.PreferredUsername)
+	})(w, r)
 }
 
 func (h *AuthHandler) onIdentity(w http.ResponseWriter, r *http.Request, subject, preferredUsername string) {

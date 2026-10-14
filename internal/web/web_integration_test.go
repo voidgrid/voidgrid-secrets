@@ -35,6 +35,7 @@ type env struct {
 	tokens     *storage.TokenRepo
 	groups     *storage.GroupRepo
 	audit      *storage.AuditRepo
+	db         *storage.DB
 }
 
 const testSetupToken = "vgs_setup_test" //nolint:gosec // fake test fixture, not a real credential
@@ -82,22 +83,24 @@ func newEnv(t *testing.T) env {
 		ValidateTOTP:   gototp.Validate,
 	}
 
+	recoveryService := &recovery.Service{
+		Users: userRepo, Resets: storage.NewResetRepo(db, rootKey), RecoveryCodes: recoveryCodeRepo, Sessions: sessionRepo,
+		GenerateTOTP: gototp.Generate, ValidateTOTP: gototp.Validate, HashPassword: crypto.HashPassword, Audit: auditRepo,
+	}
 	handler := web.NewRouter(web.Deps{
 		SetupChecker: authConfigRepo,
 		SessionAuth:  sessionRepo,
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
 		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, wizard, auditRepo),
-		Recover: web.NewRecoverHandler(&recovery.Service{
-			Users: userRepo, Resets: storage.NewResetRepo(db, rootKey), RecoveryCodes: recoveryCodeRepo, Sessions: sessionRepo,
-			GenerateTOTP: gototp.Generate, ValidateTOTP: gototp.Validate, HashPassword: crypto.HashPassword, Audit: auditRepo,
-		}),
-		Secrets: web.NewSecretsHandler(secretRepo, tokenRepo, groupRepo, auditRepo),
-		Tokens:  web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),
-		Groups:  web.NewGroupsHandler(groupRepo, secretRepo, auditRepo),
-		Audit:   web.NewAuditHandler(auditRepo, tokenRepo),
+		Recover:      web.NewRecoverHandler(recoveryService),
+		Account:      web.NewAccountHandler(loginService, recoveryService, userRepo, oidcProvider, auditRepo),
+		Secrets:      web.NewSecretsHandler(secretRepo, tokenRepo, groupRepo, auditRepo),
+		Tokens:       web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),
+		Groups:       web.NewGroupsHandler(groupRepo, secretRepo, auditRepo),
+		Audit:        web.NewAuditHandler(auditRepo, tokenRepo),
 	})
 
-	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo, tokens: tokenRepo, groups: groupRepo, audit: auditRepo}
+	return env{handler: handler, users: userRepo, sessions: sessionRepo, secrets: secretRepo, authConfig: authConfigRepo, tokens: tokenRepo, groups: groupRepo, audit: auditRepo, db: db}
 }
 
 func doForm(t *testing.T, handler http.Handler, path string, form url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {

@@ -16,6 +16,7 @@ Entries older than **14 days** are deleted - at startup and once a day.
 | Sign-in | `login`, `login_failed`, `login_locked_out`, `logout`, `token_auth_failed` |
 | Setup | `setup_token_rejected`, `setup_account_created`, `setup_completed` |
 | Recovery | `recovery_started`, `recovery_failed`, `recovery_completed`, `break_glass_issued` |
+| Account | `reauth`, `reauth_failed`, `recovery_codes_regenerated` (the account page: re-authentication, then a fresh set of recovery codes) |
 | Secrets | `secret_create`, `secret_update`, `secret_rename`, `secret_delete`, `reveal`, `access_denied` |
 | Machine tokens | `token_create`, `token_revoke`, `token_grant`, `token_ungrant`, `token_grants_set` (the token editor's save; lists the secret ids added, removed and changed) |
 | Groups | `group_create`, `group_rename`, `group_delete`, `group_members` |

@@ -246,3 +246,24 @@ func (s *Service) issueRecoveryCodes(ctx context.Context, userID int64) ([]strin
 	}
 	return codes, nil
 }
+
+// RegenerateCodes replaces userID's recovery codes with a fresh set,
+// invalidating every earlier one, and returns the new codes. The caller
+// has already re-authenticated the account; method says how ("password"
+// or "oidc") for the audit log.
+func (s *Service) RegenerateCodes(ctx context.Context, userID int64, method string) ([]string, error) {
+	codes, err := s.issueRecoveryCodes(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	audit.Record(ctx, s.Audit, audit.Event{
+		Actor: audit.User(userID), Action: audit.RecoveryCodesRegenerated, ResourceType: "user", ResourceID: userID,
+		Details: map[string]string{"method": method},
+	})
+	return codes, nil
+}
+
+// UnusedCodes returns how many recovery codes userID has left.
+func (s *Service) UnusedCodes(ctx context.Context, userID int64) (int, error) {
+	return s.RecoveryCodes.CountUnused(ctx, userID)
+}

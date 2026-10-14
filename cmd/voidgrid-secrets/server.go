@@ -131,6 +131,7 @@ func runServer(cfg config.Config) error {
 		Tokens:       web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),
 		Groups:       web.NewGroupsHandler(groupRepo, secretRepo, auditRepo),
 		Audit:        web.NewAuditHandler(auditRepo, tokenRepo),
+		Account:      web.NewAccountHandler(loginService, recoveryService, userRepo, oidcProvider, auditRepo),
 	})
 
 	root := chi.NewMux()
