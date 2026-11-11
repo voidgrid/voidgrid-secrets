@@ -104,11 +104,6 @@ func (r *UserRepo) SetTOTPSecret(ctx context.Context, secret string) error {
 		b64enc(ciphertext), b64enc(nonce), AccountID)
 }
 
-// SetPassword replaces the account's password hash.
-func (r *UserRepo) SetPassword(ctx context.Context, passwordHash string) error {
-	return r.write(ctx, "set password", `UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, AccountID)
-}
-
 // ConsumeTOTPCode records code as the most recently used TOTP code,
 // rejecting it (ok=false) if it matches the code already on record. TOTP
 // codes stay valid for a window of time (one period of skew either side,

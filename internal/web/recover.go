@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/session"
 	"github.com/voidgrid/voidgrid-secrets/internal/auth/totp"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
@@ -17,12 +18,14 @@ const resetCookie = "vgs_reset"
 
 // RecoverHandler serves the account reset pages.
 type RecoverHandler struct {
-	svc *recovery.Service
+	svc      *recovery.Service
+	sessions session.SessionCreator
+	audit    audit.Logger
 }
 
 // NewRecoverHandler returns a RecoverHandler backed by svc.
-func NewRecoverHandler(svc *recovery.Service) *RecoverHandler {
-	return &RecoverHandler{svc: svc}
+func NewRecoverHandler(svc *recovery.Service, sessions session.SessionCreator, auditLog audit.Logger) *RecoverHandler {
+	return &RecoverHandler{svc: svc, sessions: sessions, audit: auditLog}
 }
 
 type recoverResetPage struct {
@@ -108,6 +111,8 @@ func (h *RecoverHandler) SubmitReset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
+	// Read the account before Complete spends the reset.
+	_, acct, _ := h.svc.Pending(r.Context(), c.Value)
 	codes, err := h.svc.Complete(r.Context(), c.Value, r.FormValue("password"), r.FormValue("totp_code"))
 	switch {
 	case err == nil:
@@ -125,5 +130,22 @@ func (h *RecoverHandler) SubmitReset(w http.ResponseWriter, r *http.Request) {
 		Name: resetCookie, Value: "", Path: "/recover", Expires: time.Unix(0, 0), MaxAge: -1,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
-	render(w, http.StatusOK, "recovery_codes", recoveryCodesPage{Codes: codes, ContinueTo: "/login"})
+	continueTo := "/login"
+	if acct.AuthMethod == model.AuthOIDC {
+		// A password account signs in with the credentials it just set.
+		// An OIDC account has none here, and its provider may be the very
+		// thing that's gone, so the reset itself signs it in.
+		token, expiresAt, err := h.sessions.Create(r.Context(), acct.ID, session.DefaultTTL)
+		if err != nil {
+			http.Error(w, "the reset finished, but signing you in failed - sign in with OIDC, or use one of your new recovery codes", http.StatusInternalServerError)
+			return
+		}
+		session.SetCookie(w, token, expiresAt)
+		audit.Record(r.Context(), h.audit, audit.Event{
+			Actor: audit.User(acct.ID), Action: audit.Login, ResourceType: "user", ResourceID: acct.ID,
+			Details: map[string]string{"method": "recovery"},
+		})
+		continueTo = "/secrets"
+	}
+	render(w, http.StatusOK, "recovery_codes", recoveryCodesPage{Codes: codes, ContinueTo: continueTo})
 }

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/crypto"
+	"github.com/voidgrid/voidgrid-secrets/internal/envname"
 	"github.com/voidgrid/voidgrid-secrets/internal/model"
 )
 
@@ -142,7 +144,14 @@ func (r *SecretRepo) store(ctx context.Context, id int64, value []byte, updatedA
 // Rename changes a secret's name. Its encryption is bound to its id, not
 // its name, so nothing is re-encrypted. Token grants that derive their
 // environment variable name from the secret's name follow the new name.
+//
+// A rename that would make two of one token's grants derive the same
+// environment variable name is refused with ErrEnvNameTaken: /env would
+// otherwise answer 409 and the token's consumers would stop starting.
 func (r *SecretRepo) Rename(ctx context.Context, id int64, name string) (model.Secret, error) {
+	if err := r.checkRenameEnvNames(ctx, id, name); err != nil {
+		return model.Secret{}, err
+	}
 	results, err := r.db.write(ctx, []Statement{{
 		Query:     `UPDATE secrets SET name = ?, updated_at = ? WHERE id = ?`,
 		Arguments: []interface{}{name, nowTimestamp(), id},
@@ -157,6 +166,41 @@ func (r *SecretRepo) Rename(ctx context.Context, id int64, name string) (model.S
 		return model.Secret{}, ErrSecretNotFound
 	}
 	return r.Get(ctx, id)
+}
+
+// checkRenameEnvNames looks at every token that exposes secret id under a
+// name derived from the secret's name, and refuses newName if it derives a
+// name another of that token's grants already uses.
+func (r *SecretRepo) checkRenameEnvNames(ctx context.Context, id int64, newName string) error {
+	qr, err := r.db.queryOne(ctx, Statement{
+		Query: `SELECT s.name, o.env_name
+			FROM machine_token_grants g
+			JOIN machine_token_grants o ON o.token_id = g.token_id AND o.secret_id != g.secret_id
+			JOIN secrets s ON s.id = o.secret_id
+			WHERE g.secret_id = ? AND g.env_name IS NULL`,
+		Arguments: []interface{}{id},
+	})
+	if err != nil {
+		return fmt.Errorf("storage: check env names for rename of secret %d: %w", id, err)
+	}
+	derived := envname.Derive(newName)
+	for qr.Next() {
+		var (
+			otherName string
+			explicit  sql.NullString
+		)
+		if err := qr.Scan(&otherName, &explicit); err != nil {
+			return fmt.Errorf("storage: scan grant for rename of secret %d: %w", id, err)
+		}
+		other := explicit.String
+		if other == "" {
+			other = envname.Derive(otherName)
+		}
+		if other == derived {
+			return fmt.Errorf("%w: %s", ErrEnvNameTaken, derived)
+		}
+	}
+	return nil
 }
 
 // Delete removes a secret. Token grants on it go with it (foreign key

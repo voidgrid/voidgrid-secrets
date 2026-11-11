@@ -84,7 +84,7 @@ func newEnv(t *testing.T) env {
 	}
 
 	recoveryService := &recovery.Service{
-		Users: userRepo, Resets: storage.NewResetRepo(db, rootKey), RecoveryCodes: recoveryCodeRepo, Sessions: sessionRepo,
+		Users: userRepo, Resets: storage.NewResetRepo(db, rootKey), RecoveryCodes: recoveryCodeRepo,
 		GenerateTOTP: gototp.Generate, ValidateTOTP: gototp.Validate, HashPassword: crypto.HashPassword, Audit: auditRepo,
 	}
 	handler := web.NewRouter(web.Deps{
@@ -92,7 +92,7 @@ func newEnv(t *testing.T) env {
 		SessionAuth:  sessionRepo,
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
 		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, wizard, auditRepo),
-		Recover:      web.NewRecoverHandler(recoveryService),
+		Recover:      web.NewRecoverHandler(recoveryService, sessionRepo, auditRepo),
 		Account:      web.NewAccountHandler(loginService, recoveryService, userRepo, oidcProvider, auditRepo),
 		Secrets:      web.NewSecretsHandler(secretRepo, tokenRepo, groupRepo, auditRepo),
 		Tokens:       web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),

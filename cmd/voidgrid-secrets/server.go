@@ -73,7 +73,7 @@ func runServer(cfg config.Config) error {
 
 	go pruneAuditLog(context.Background(), auditRepo)
 
-	oidcProvider := loadOIDCProvider(context.Background(), authConfigRepo)
+	oidcProvider := loadOIDCProvider(authConfigRepo)
 
 	setupToken, err := setupTokenIfNeeded(context.Background(), authConfigRepo)
 	if err != nil {
@@ -103,7 +103,7 @@ func runServer(cfg config.Config) error {
 		Limiter:        limiter,
 		Audit:          auditRepo,
 	}
-	recoveryService := newRecoveryService(userRepo, resetRepo, recoveryCodeRepo, sessionRepo, auditRepo)
+	recoveryService := newRecoveryService(userRepo, resetRepo, recoveryCodeRepo, auditRepo)
 	recoveryService.Limiter = limiter
 
 	apiHandler := api.NewRouter(api.Deps{
@@ -126,7 +126,7 @@ func runServer(cfg config.Config) error {
 		SessionAuth:  sessionRepo,
 		Setup:        web.NewSetupHandler(wizard, oidcProvider),
 		Auth:         web.NewAuthHandler(loginService, sessionRepo, authConfigRepo, oidcProvider, userRepo, wizard, auditRepo),
-		Recover:      web.NewRecoverHandler(recoveryService),
+		Recover:      web.NewRecoverHandler(recoveryService, sessionRepo, auditRepo),
 		Secrets:      web.NewSecretsHandler(secretRepo, tokenRepo, groupRepo, auditRepo),
 		Tokens:       web.NewTokensHandler(tokenRepo, secretRepo, groupRepo, auditRepo),
 		Groups:       web.NewGroupsHandler(groupRepo, secretRepo, auditRepo),
@@ -202,12 +202,6 @@ func publishSelf(dir string) {
 	}
 }
 
-// loadOIDCProvider builds the deployment's OIDC client at startup, if
-// setup already completed with OIDC chosen. A failure here (e.g. the
-// issuer is temporarily unreachable) is logged, not fatal: the server
-// must still start and serve recovery-code login either way - that's the
-// entire point of recovery codes existing. The provider can also be set
-// later, directly, by a successful SetupOIDC call.
 // setupTokenIfNeeded generates the one-time setup token while setup is
 // incomplete and prints it to the log, which only the operator can read.
 // The setup wizard refuses every step without it. It lives only in this
@@ -229,28 +223,29 @@ func setupTokenIfNeeded(ctx context.Context, authConfigRepo *storage.AuthConfigR
 	return token, nil
 }
 
-func loadOIDCProvider(ctx context.Context, authConfigRepo *storage.AuthConfigRepo) *oidcclient.Provider {
-	provider := &oidcclient.Provider{}
-
-	// A pending config (OIDC saved, operator not signed in yet) is loaded
-	// too, so a restart mid-setup doesn't strand the sign-in step.
-	cfg, err := authConfigRepo.Get(ctx)
-	if err != nil || cfg.AuthMethod != model.AuthOIDC {
-		return provider
-	}
-
-	client, err := oidcclient.New(ctx, oidcclient.Config{
-		Issuer:       cfg.OIDCIssuer,
-		ClientID:     cfg.OIDCClientID,
-		ClientSecret: cfg.OIDCClientSecret,
-		RedirectURI:  cfg.OIDCRedirectURI,
-	})
-	if err != nil {
-		log.Printf("oidc: failed to initialize at startup - OIDC login will be unavailable until this server is restarted with a reachable issuer; use recovery-code login until then: %v", err)
-		return provider
-	}
-
-	provider.Set(client)
+// loadOIDCProvider builds the deployment's OIDC client at startup, if
+// setup already chose OIDC. A failure here (e.g. the issuer is
+// temporarily unreachable) is logged, not fatal: the server must still
+// start and serve recovery either way, and the provider tries again on
+// the next sign-in. The provider can also be set later, directly, by a
+// successful SetupOIDC call.
+func loadOIDCProvider(authConfigRepo *storage.AuthConfigRepo) *oidcclient.Provider {
+	provider := &oidcclient.Provider{Load: func(ctx context.Context) (*oidcclient.Client, error) {
+		// A pending config (OIDC saved, operator not signed in yet) is
+		// loaded too, so a restart mid-setup doesn't strand the sign-in
+		// step.
+		cfg, err := authConfigRepo.Get(ctx)
+		if err != nil || cfg.AuthMethod != model.AuthOIDC {
+			return nil, nil //nolint:nilerr,nilnil // no OIDC config (yet) is not a failure
+		}
+		return oidcclient.New(ctx, oidcclient.Config{
+			Issuer:       cfg.OIDCIssuer,
+			ClientID:     cfg.OIDCClientID,
+			ClientSecret: cfg.OIDCClientSecret,
+			RedirectURI:  cfg.OIDCRedirectURI,
+		})
+	}}
+	provider.Get() // first attempt now; a failure is logged and retried on sign-in
 	return provider
 }
 
@@ -282,10 +277,10 @@ func pruneAuditLog(ctx context.Context, repo *storage.AuditRepo) {
 // newRecoveryService builds the account recovery service, shared by the
 // server and the `recover` command.
 func newRecoveryService(users *storage.UserRepo, resets *storage.ResetRepo, codes *storage.RecoveryCodeRepo,
-	sessions *storage.SessionRepo, auditLog audit.Logger,
+	auditLog audit.Logger,
 ) *recovery.Service {
 	return &recovery.Service{
-		Users: users, Resets: resets, RecoveryCodes: codes, Sessions: sessions,
+		Users: users, Resets: resets, RecoveryCodes: codes,
 		GenerateTOTP: totp.Generate, ValidateTOTP: totp.Validate, HashPassword: crypto.HashPassword,
 		Audit: auditLog,
 	}

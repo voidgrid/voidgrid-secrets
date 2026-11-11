@@ -106,3 +106,47 @@ func TestSecretEncryptionIsBoundToItsRow(t *testing.T) {
 		t.Fatalf("Reveal(b) = %q, %v", got, err)
 	}
 }
+
+// A rename must not make two of one token's grants derive the same
+// environment variable name: /env would refuse that token from then on.
+func TestRenameRefusesEnvNameClashOnAToken(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	repo := storage.NewSecretRepo(db, make([]byte, crypto.KeySize))
+	tokens := storage.NewTokenRepo(db)
+
+	a, _ := repo.Create(ctx, "api-key", []byte("a"))
+	b, _ := repo.Create(ctx, "foo", []byte("b"))
+	c, _ := repo.Create(ctx, "bar", []byte("c"))
+	_, mt, err := tokens.Create(ctx, "svc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tokens.AddGrant(ctx, mt.ID, a.ID, "read", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := tokens.AddGrant(ctx, mt.ID, b.ID, "read", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := tokens.AddGrant(ctx, mt.ID, c.ID, "read", "EXPLICIT"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Clashes with a derived name, and with another grant's explicit name.
+	for _, name := range []string{"api_key", "explicit"} {
+		if _, err := repo.Rename(ctx, b.ID, name); !errors.Is(err, storage.ErrEnvNameTaken) {
+			t.Fatalf("Rename(foo -> %s) = %v, want ErrEnvNameTaken", name, err)
+		}
+	}
+	if s, _ := repo.Get(ctx, b.ID); s.Name != "foo" {
+		t.Fatalf("refused rename still changed the name to %q", s.Name)
+	}
+	// A grant with its own explicit name doesn't follow the secret's name,
+	// so renaming that secret can't clash.
+	if _, err := repo.Rename(ctx, c.ID, "api_key"); err != nil {
+		t.Fatalf("Rename(bar -> api_key) with an explicit env name: %v", err)
+	}
+	if _, err := repo.Rename(ctx, b.ID, "foo-2"); err != nil {
+		t.Fatalf("Rename(foo -> foo-2): %v", err)
+	}
+}

@@ -107,7 +107,7 @@ func (h *AccountHandler) StartOIDCReauth(w http.ResponseWriter, r *http.Request)
 	}
 	client, ok := h.oidcProvider.Get()
 	if !ok {
-		h.render(w, r, user, http.StatusServiceUnavailable, "the OIDC provider couldn't be reached at startup")
+		h.render(w, r, user, http.StatusServiceUnavailable, "the OIDC provider can't be reached right now - try again shortly")
 		return
 	}
 	client.ReauthLoginHandler()(w, r)

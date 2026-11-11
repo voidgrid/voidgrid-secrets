@@ -203,6 +203,9 @@ type RenameSecretInput struct {
 	}
 }
 
+const renameEnvNameTaken = "a token granted this secret already uses the environment variable name the new name gives - " +
+	"rename to something else, or give one of that token's grants an explicit name"
+
 // Rename changes a secret's name.
 func (h *SecretsHandler) Rename(ctx context.Context, in *RenameSecretInput) (*SecretOutput, error) {
 	if err := requireSession(ctx); err != nil {
@@ -215,6 +218,9 @@ func (h *SecretsHandler) Rename(ctx context.Context, in *RenameSecretInput) (*Se
 	s, err := h.repo.Rename(ctx, in.ID, in.Body.Name)
 	if errors.Is(err, storage.ErrSecretNameTaken) {
 		return nil, huma.Error409Conflict("a secret with that name already exists")
+	}
+	if errors.Is(err, storage.ErrEnvNameTaken) {
+		return nil, huma.Error409Conflict(renameEnvNameTaken)
 	}
 	if err != nil {
 		return nil, notFoundOr500(err)

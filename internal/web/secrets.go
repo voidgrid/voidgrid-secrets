@@ -344,6 +344,10 @@ func (h *SecretsHandler) SubmitRename(w http.ResponseWriter, r *http.Request) {
 		h.renderDetail(w, r, http.StatusConflict, "a secret with that name already exists")
 		return
 	}
+	if errors.Is(err, storage.ErrEnvNameTaken) {
+		h.renderDetail(w, r, http.StatusConflict, "a token granted this secret already uses the environment variable name the new name gives - rename to something else, or give one of that token's grants an explicit name")
+		return
+	}
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

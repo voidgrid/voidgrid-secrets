@@ -34,11 +34,8 @@ func TestPasswordAccountRoundTrip(t *testing.T) {
 	if err := repo.SetTOTPSecret(ctx, "JBSWY3DPEHPK3PXP"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetPassword(ctx, "hash-2"); err != nil {
-		t.Fatal(err)
-	}
 	rec, err = repo.GetAuthRecord(ctx, "owner")
-	if err != nil || rec.PasswordHash != "hash-2" || rec.TOTPSecret != "JBSWY3DPEHPK3PXP" {
+	if err != nil || rec.PasswordHash != "hash-1" || rec.TOTPSecret != "JBSWY3DPEHPK3PXP" {
 		t.Fatalf("after updates: %+v, %v", rec, err)
 	}
 	if _, err := repo.GetAuthRecord(ctx, "someone-else"); !errors.Is(err, storage.ErrUserNotFound) {

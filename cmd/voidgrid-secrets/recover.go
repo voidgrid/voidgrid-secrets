@@ -50,7 +50,7 @@ func runRecover(args []string) error {
 
 	auditRepo := storage.NewAuditRepo(db)
 	svc := newRecoveryService(storage.NewUserRepo(db, rootKey), storage.NewResetRepo(db, rootKey),
-		storage.NewRecoveryCodeRepo(db), storage.NewSessionRepo(db), auditRepo)
+		storage.NewRecoveryCodeRepo(db), auditRepo)
 	code, expiresAt, err := svc.IssueBreakGlass(ctx)
 	if err != nil {
 		return fmt.Errorf("recover: %w", err)

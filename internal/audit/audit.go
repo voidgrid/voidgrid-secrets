@@ -66,6 +66,10 @@ const (
 	GroupMembers = "group_members"
 
 	AuditPruned = "audit_pruned"
+	// AuditSuppressed says how many failed-attempt entries were dropped
+	// because unauthenticated requests were failing faster than the log
+	// records them (see storage.AuditRepo).
+	AuditSuppressed = "audit_suppressed"
 )
 
 // Actor is who performed an action. ID is 0 for anonymous and system.

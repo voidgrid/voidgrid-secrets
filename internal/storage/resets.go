@@ -129,16 +129,66 @@ func (r *ResetRepo) Get(ctx context.Context, resetHash string) (Reset, bool, err
 	return reset, true, nil
 }
 
-// Finish marks a started reset used. It reports whether it was still open,
-// so two concurrent finishes can't both succeed.
-func (r *ResetRepo) Finish(ctx context.Context, resetHash string) (bool, error) {
-	results, err := r.db.write(ctx, []Statement{{
-		Query: `UPDATE account_resets SET used_at = ?, totp_secret_enc = NULL, totp_secret_nonce = NULL
+// Complete finishes the started reset held under resetHash, in one
+// transaction: the reset is marked used, the account gets its new password
+// and TOTP secret (password accounts; an empty passwordHash leaves the
+// credentials alone, for OIDC accounts), its recovery codes are replaced by
+// codeHashes, and every session is revoked. It reports whether the reset
+// was still open - two concurrent calls can't both succeed - and on any
+// failure nothing changes, so the account is never left half reset.
+func (r *ResetRepo) Complete(ctx context.Context, resetHash string, userID int64, passwordHash, totpSecret string, codeHashes []string) (bool, error) {
+	var totpEnc, totpNonce string
+	if passwordHash != "" {
+		ciphertext, nonce, err := crypto.Encrypt(r.rootKey, []byte(totpSecret))
+		if err != nil {
+			return false, fmt.Errorf("storage: encrypt TOTP secret: %w", err)
+		}
+		totpEnc, totpNonce = b64enc(ciphertext), b64enc(nonce)
+	}
+
+	tx, err := r.db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("storage: complete reset: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	now := nowTimestamp()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE account_resets SET used_at = ?, totp_secret_enc = NULL, totp_secret_nonce = NULL
 			WHERE code_hash = ? AND stage = 'started' AND used_at IS NULL AND expires_at > ?`,
-		Arguments: []interface{}{nowTimestamp(), resetHash, nowTimestamp()},
-	}})
-	if err := writeErr("finish reset", results, err); err != nil {
+		now, resetHash, now)
+	if err != nil {
+		return false, fmt.Errorf("storage: complete reset: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return false, nil
+	}
+
+	exec := func(query string, args ...interface{}) error {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("storage: complete reset: %w", err)
+		}
+		return nil
+	}
+	if passwordHash != "" {
+		if err := exec(`UPDATE users SET password_hash = ?, totp_secret_enc = ?, totp_secret_nonce = ?, totp_last_code = NULL WHERE id = ?`,
+			passwordHash, totpEnc, totpNonce, userID); err != nil {
+			return false, err
+		}
+	}
+	if err := exec(`DELETE FROM recovery_codes WHERE user_id = ?`, userID); err != nil {
 		return false, err
 	}
-	return results[0].RowsAffected == 1, nil
+	for _, h := range codeHashes {
+		if err := exec(`INSERT INTO recovery_codes (user_id, code_hash, created_at) VALUES (?, ?, ?)`, userID, h, now); err != nil {
+			return false, err
+		}
+	}
+	if err := exec(`UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`, now, userID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("storage: complete reset: %w", err)
+	}
+	return true, nil
 }

@@ -5,25 +5,93 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/voidgrid/voidgrid-secrets/internal/audit"
 )
 
+// anonymousFailuresPerMinute caps how many failed attempts by
+// unauthenticated requests are recorded per minute, all sources together.
+// Those requests need no credentials, so without a cap anyone who can
+// reach the port could grow the database, and queue a synced write ahead
+// of every real request, as fast as they can send.
+const anonymousFailuresPerMinute = 60
+
+// throttledActions are the entries an unauthenticated request can cause at
+// will. Everything else is always recorded.
+var throttledActions = map[string]bool{
+	audit.TokenAuthFailed:    true,
+	audit.LoginFailed:        true,
+	audit.LoginLockedOut:     true,
+	audit.RecoveryFailed:     true,
+	audit.SetupTokenRejected: true,
+}
+
 // AuditRepo appends to and reads the audit_log table.
 type AuditRepo struct {
 	db *DB
+	// now is replaced by tests.
+	now func() time.Time
+
+	mu          sync.Mutex
+	windowStart time.Time
+	inWindow    int
+	dropped     int64
+}
+
+// admit reports whether one more throttled entry fits in the current
+// minute. When it does, it also returns how many were dropped since the
+// last one that fit, for the caller to record.
+func (r *AuditRepo) admit() (ok bool, droppedBefore int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	if now.Sub(r.windowStart) >= time.Minute {
+		r.windowStart, r.inWindow = now, 0
+	}
+	if r.inWindow >= anonymousFailuresPerMinute {
+		r.dropped++
+		return false, 0
+	}
+	r.inWindow++
+	droppedBefore, r.dropped = r.dropped, 0
+	return true, droppedBefore
 }
 
 // NewAuditRepo returns an AuditRepo backed by db.
 func NewAuditRepo(db *DB) *AuditRepo {
-	return &AuditRepo{db: db}
+	return &AuditRepo{db: db, now: time.Now}
 }
 
 // Log records e. Its details, plus where the request came from (see
 // audit.Middleware), are stored as JSON in the metadata column.
+//
+// Failed attempts by unauthenticated requests beyond
+// anonymousFailuresPerMinute are dropped, not recorded; the next one that
+// is recorded is preceded by an audit_suppressed entry with the count.
 func (r *AuditRepo) Log(ctx context.Context, e audit.Event) error {
+	if e.Actor.Type == audit.ActorAnonymous && throttledActions[e.Action] {
+		ok, dropped := r.admit()
+		if !ok {
+			return nil
+		}
+		if dropped > 0 {
+			// Not ctx: the count belongs to no one request, so it carries no address.
+			if err := r.insert(context.Background(), audit.Event{
+				Actor: audit.System(), Action: audit.AuditSuppressed, ResourceType: "audit",
+				Details: map[string]string{"dropped": strconv.FormatInt(dropped, 10), "per_minute_limit": strconv.Itoa(anonymousFailuresPerMinute)},
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return r.insert(ctx, e)
+}
+
+func (r *AuditRepo) insert(ctx context.Context, e audit.Event) error {
 	meta := map[string]string{}
 	for k, v := range e.Details {
 		meta[k] = v

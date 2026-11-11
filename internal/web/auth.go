@@ -84,7 +84,7 @@ func (h *AuthHandler) ShowLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	page := loginPage{AuthMethod: cfg.AuthMethod}
 	if r.URL.Query().Get("error") == "oidc_unavailable" {
-		page.Error = "OIDC sign-in is unavailable right now (the provider couldn't be reached at startup). Use a recovery code to get in."
+		page.Error = "OIDC sign-in is unavailable right now (the provider can't be reached). Try again shortly, or use a recovery code to get in."
 	}
 	render(w, http.StatusOK, "login", page)
 }
@@ -123,7 +123,7 @@ func (h *AuthHandler) SubmitLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // StartOIDCLogin redirects to the OIDC provider. If the provider client
-// isn't available (unreachable at startup), it points at recovery instead
+// isn't available (unreachable), it points at recovery instead
 // of failing dead.
 func (h *AuthHandler) StartOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	client, ok := h.oidcProvider.Get()

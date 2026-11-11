@@ -48,12 +48,9 @@ type Service struct {
 	Users         *storage.UserRepo
 	Resets        *storage.ResetRepo
 	RecoveryCodes *storage.RecoveryCodeRepo
-	Sessions      interface {
-		RevokeAll(ctx context.Context, userID int64) error
-	}
-	GenerateTOTP func(accountName string) (secret, provisioningURI string, err error)
-	ValidateTOTP func(code, secret string) bool
-	HashPassword func(password string) (string, error)
+	GenerateTOTP  func(accountName string) (secret, provisioningURI string, err error)
+	ValidateTOTP  func(code, secret string) bool
+	HashPassword  func(password string) (string, error)
 	// Limiter throttles wrong codes. nil means no limit.
 	Limiter *session.AttemptLimiter
 	Audit   audit.Logger
@@ -185,7 +182,17 @@ func (s *Service) Complete(ctx context.Context, resetToken, newPassword, totpCod
 
 	// Mark the reset used before changing anything, so it can't be
 	// finished twice.
-	finished, err := s.Resets.Finish(ctx, crypto.HashToken(resetToken))
+	codes, err := recoverycode.Generate()
+	if err != nil {
+		return nil, err
+	}
+	hashed := make([]string, len(codes))
+	for i, c := range codes {
+		hashed[i] = crypto.HashToken(c)
+	}
+	// One transaction: a failure part-way must not leave a new password
+	// with the old (lost) authenticator and the reset already spent.
+	finished, err := s.Resets.Complete(ctx, crypto.HashToken(resetToken), acct.ID, passwordHash, reset.PendingTOTPSecret, hashed)
 	if err != nil {
 		return nil, err
 	}
@@ -193,21 +200,6 @@ func (s *Service) Complete(ctx context.Context, resetToken, newPassword, totpCod
 		return nil, ErrInvalidReset
 	}
 
-	if method == model.AuthPasswordTOTP {
-		if err := s.Users.SetPassword(ctx, passwordHash); err != nil {
-			return nil, err
-		}
-		if err := s.Users.SetTOTPSecret(ctx, reset.PendingTOTPSecret); err != nil {
-			return nil, err
-		}
-	}
-	codes, err := s.issueRecoveryCodes(ctx, acct.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.Sessions.RevokeAll(ctx, acct.ID); err != nil {
-		return nil, err
-	}
 	audit.Record(ctx, s.Audit, audit.Event{
 		Actor: audit.User(acct.ID), Action: audit.RecoveryCompleted, ResourceType: "user", ResourceID: acct.ID,
 		Details: map[string]string{"source": reset.Source},

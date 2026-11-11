@@ -120,13 +120,3 @@ func (r *SessionRepo) Revoke(ctx context.Context, plaintext string) error {
 	}
 	return nil
 }
-
-// RevokeAll ends every session of userID - used when the account is
-// recovered, so anyone holding an old session is signed out.
-func (r *SessionRepo) RevokeAll(ctx context.Context, userID int64) error {
-	results, err := r.db.write(ctx, []Statement{{
-		Query:     `UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
-		Arguments: []interface{}{nowTimestamp(), userID},
-	}})
-	return writeErr("revoke all sessions", results, err)
-}
