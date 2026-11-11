@@ -1,0 +1,5 @@
+# False positives: the port and path of an example URL
+# (http://voidgrid-secrets:8443/api/v1/secrets/1) in a commented curl line
+# read as a generic API key.
+7bc0c404fd70ac8a5c3c2a311f679c80351a3889:deploy/docker-compose.example.yml:generic-api-key:62
+d44bb0b3077b1af00a27fd0cffc8898e9b4429ec:examples/docker-compose.yml:generic-api-key:51
