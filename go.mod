@@ -1,6 +1,6 @@
 module github.com/voidgrid/voidgrid-secrets
 
-go 1.26.8
+go 1.27
 
 require (
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc

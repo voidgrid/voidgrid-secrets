@@ -11,7 +11,7 @@
 # scripts/test.sh (`make test`, which builds just this stage and runs the
 # tests in it), so the two can't drift apart. gcc/musl-dev are needed only
 # for `-race` (cgo); the SQLite driver is pure Go.
-FROM golang:1.26-alpine AS testenv
+FROM golang:1.27-alpine AS testenv
 RUN apk add --no-cache gcc musl-dev
 
 # Tests gate the image: a failing `go vet`/`go test` here fails the whole

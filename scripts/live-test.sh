@@ -50,6 +50,6 @@ run_logged live-test docker run --rm \
   -v "$ROOT":/src -w /src \
   -v "$ROOT/.dev/gocache":/cache/go-build \
   -v "$ROOT/.dev/gomodcache":/cache/gomod \
-  golang:1.26-alpine \
+  golang:1.27-alpine \
   go test -tags live -count=1 -v ./internal/auth/oidc/
 exit $?

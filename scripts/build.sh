@@ -19,6 +19,6 @@ run_logged build docker run --rm \
   -v "$ROOT":/src -w /src \
   -v "$ROOT/.dev/gocache":/cache/go-build \
   -v "$ROOT/.dev/gomodcache":/cache/gomod \
-  golang:1.26-alpine \
+  golang:1.27-alpine \
   go build -ldflags "-X github.com/voidgrid/voidgrid-secrets/internal/version.Version=$VERSION" -o bin/voidgrid-secrets ./cmd/voidgrid-secrets
 exit $?
