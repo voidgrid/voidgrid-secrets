@@ -14,7 +14,7 @@ You reached the app over `http://` from an address that is not listed in
 (it must send `X-Forwarded-Proto: https`), or list your networks in the
 `.env` file next to your compose file and recreate the container:
 
-```
+```sh
 VOIDGRID_HTTP_ALLOWED_NETS=192.168.1.0/24,100.64.0.0/10,fd7a:115c:a1e0::/48
 ```
 
@@ -41,7 +41,7 @@ use a recovery code at `/recover` - see
 It exists only in the running process and a restart prints a new one, as long
 as setup isn't finished:
 
-```
+```sh
 docker compose restart voidgrid-secrets; docker compose logs voidgrid-secrets | grep 'setup token'
 ```
 
@@ -77,7 +77,7 @@ If the app can't start it exits with code 1, and a restart policy such as
 `restart: unless-stopped` then restarts it in a loop (`docker ps` shows
 `Restarting`). The last line of the log is the cause:
 
-```
+```sh
 docker compose logs voidgrid-secrets
 ```
 
@@ -96,7 +96,7 @@ docker compose logs voidgrid-secrets
   through another container (a restore, for example); fix it with `chown
   1000:1000` on the directory and `voidgrid.db`, as in the restore command in
   [deployment.md](deployment.md#backup-and-restore).
-- **`export: could not publish the executable to ... `** - a warning, not a
+- **`export: could not publish the executable to ...`** - a warning, not a
   failure: the server is running, but it couldn't write its copy for
   consumers to mount (the directory isn't writable by UID 1000). The usual
   cause is a bind-mounted `data/bin` that Docker created as root because a
@@ -136,7 +136,7 @@ your reverse proxy, and `VOIDGRID_URL` in consumers.
 1. Read the consumer's start-up output. `run` prints one line naming the
    variables it injected:
 
-   ```
+   ```text
    voidgrid-secrets run: injecting 2 variable(s): TMDB_API_KEY, SEERR_API_KEY
    ```
 
@@ -147,9 +147,10 @@ your reverse proxy, and `VOIDGRID_URL` in consumers.
 2. Remember that `docker exec` shows a fresh environment: the secrets are in
    the app's own process only. To check names without printing values:
 
-   ```
+   ```sh
    docker compose exec myapp sh -c "tr '\0' '\n' < /proc/1/environ | cut -d= -f1"
    ```
+
 3. `run` reads its secrets once, at start. After changing a grant or a value,
    restart the consumer. The agent picks changes up by itself.
 4. In `/audit`, a consumer start-up shows one `reveal` entry (`via=env`) per
@@ -180,7 +181,7 @@ completed first" answer (503) means first-run setup isn't finished yet.
 
 Read the agent's log:
 
-```
+```sh
 docker compose logs voidgrid-secrets-agent
 ```
 

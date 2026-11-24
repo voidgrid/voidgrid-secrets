@@ -96,7 +96,7 @@ and the new ones are shown once. It's recorded in the
 
 Run this inside the server's container:
 
-```
+```sh
 docker compose exec voidgrid-secrets voidgrid-secrets recover
 ```
 

@@ -56,7 +56,7 @@ access.
 
 Check the token works from the host:
 
-```
+```sh
 curl -s -H "Authorization: Bearer $(cat ./myapp-voidgrid-token)" http://localhost:8780/api/v1/env
 ```
 

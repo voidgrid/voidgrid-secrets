@@ -12,7 +12,7 @@ Entries older than **14 days** are deleted - at startup and once a day.
 ## What's recorded
 
 | Area | Actions |
-|---|---|
+| --- | --- |
 | Sign-in | `login`, `login_failed`, `login_locked_out`, `logout`, `token_auth_failed` |
 | Setup | `setup_token_rejected`, `setup_account_created`, `setup_completed` |
 | Recovery | `recovery_started`, `recovery_failed`, `recovery_completed`, `break_glass_issued` |

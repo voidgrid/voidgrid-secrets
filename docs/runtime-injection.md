@@ -6,7 +6,7 @@ read, puts them into the environment (or into files on an in-memory
 mount), then replaces itself with the real command. The values are never
 written to disk and never appear in `docker inspect`.
 
-```
+```text
 voidgrid-secrets run [--url URL] [--token-file PATH] [--files DIR] [--timeout 30s] -- command [args...]
 ```
 
@@ -51,7 +51,7 @@ distroless and scratch images. Pick one:
 
 - **In your own Dockerfile:**
 
-  ```
+  ```dockerfile
   COPY --from=ghcr.io/voidgrid/voidgrid-secrets:beta /usr/local/bin/voidgrid-secrets /usr/local/bin/voidgrid-secrets
   ```
 
@@ -91,7 +91,7 @@ also holds the database. `bin` holds just the executable, which isn't secret.
 1. Create the directories first, owned by the user the server runs as (UID
    1000; if your host user is different, `sudo chown -R 1000:1000 data`):
 
-   ```
+   ```sh
    mkdir -p data/bin
    ```
 
@@ -255,7 +255,7 @@ ownership, e.g. `/run/voidgrid:uid=1000,gid=1000,mode=0700`.
   reveal by that token.
 
 | Setting | Flag | Environment variable | Default |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Server URL | `--url` | `VOIDGRID_URL` | none (required) |
 | Token file | `--token-file` | `VOIDGRID_TOKEN_FILE` | `/run/secrets/voidgrid-token` |
 | Token value | | `VOIDGRID_TOKEN` | used only if no token file exists |
@@ -272,7 +272,7 @@ If your consumers mount the copy the server publishes (`data/bin`), it is
 refreshed whenever the server starts on a new image. Upgrade the server,
 then restart the consumers so they start with the new copy:
 
-```
+```sh
 docker compose restart myapp
 ```
 
@@ -280,7 +280,7 @@ With a helper service instead, the copy is only refreshed when that service
 runs again. A plain `docker compose up -d` starts it again every time, and
 recreates it when the image behind the tag has changed, so after pulling:
 
-```
+```sh
 docker compose pull; docker compose up -d
 ```
 
@@ -313,7 +313,7 @@ consumer's secrets as files on a shared in-memory volume. The consumer
 needs no wrapper, no copy of the binary and no entrypoint changes - only
 a volume mount and the `*_FILE` variables its image already supports.
 
-```
+```text
 voidgrid-secrets agent --url URL --out DIR --target NAME=TOKEN_FILE,gid=GID [--target ...] [--interval 1m] [--timeout 30s] [--ready-file PATH]
 ```
 

@@ -21,13 +21,13 @@ missing file never silently becomes a new key.
 
 With compose (see `examples/docker-compose.yml`):
 
-```
+```sh
 docker compose -f examples/docker-compose.yml run --rm --entrypoint /usr/local/bin/voidgrid-secrets voidgrid-secrets keygen -path /run/secrets/voidgrid-root-key
 ```
 
 Or with plain `docker run`:
 
-```
+```sh
 docker run --rm --entrypoint /usr/local/bin/voidgrid-secrets -v voidgrid-root-key:/run/secrets ghcr.io/voidgrid/voidgrid-secrets:beta keygen -path /run/secrets/voidgrid-root-key
 ```
 
@@ -49,7 +49,7 @@ contain it), mount it as a Compose secret. The app already looks for it at
 
 Generate the key on the host, into a directory UID 1000 can write to:
 
-```
+```sh
 docker run --rm --user 1000:1000 -v "$PWD/keys":/k ghcr.io/voidgrid/voidgrid-secrets:beta keygen -path /k/voidgrid-root-key
 ```
 
@@ -75,7 +75,7 @@ file itself must be right. If it isn't, the container exits with the reason
 in its log:
 
 | Host file | Log message |
-|---|---|
+| --- | --- |
 | mode `0644` (or any group/other access) | `root key file must not be group- or other-accessible (expected mode 0600)` |
 | mode `0600` but owned by another user, such as root | `read root key file: open /run/secrets/voidgrid-root-key: permission denied` |
 
@@ -100,13 +100,13 @@ restarts or taking on a dependency, and is not supported here.
 
 ## 2. Run it
 
-```
+```sh
 docker compose -f examples/docker-compose.yml up -d
 ```
 
 Or:
 
-```
+```sh
 docker run -d --name voidgrid-secrets --user 1000:1000 -p 8780:8780 -v voidgrid-data:/data -v voidgrid-root-key:/run/secrets ghcr.io/voidgrid/voidgrid-secrets:beta
 ```
 
@@ -136,7 +136,7 @@ networks. Set `VOIDGRID_HTTP_ALLOWED_NETS` to a comma-separated list of
 CIDRs - for example your LAN and Tailscale - in the `.env` file next to
 your compose file (the example compose file passes it through):
 
-```
+```sh
 VOIDGRID_HTTP_ALLOWED_NETS=192.168.1.0/24,100.64.0.0/10,fd7a:115c:a1e0::/48
 ```
 
@@ -172,7 +172,7 @@ its log at every start, and the setup wizard refuses every step without
 it - so only someone who can read the container's log can create the
 account or configure OIDC:
 
-```
+```sh
 docker compose logs voidgrid-secrets | grep 'setup token'
 ```
 
@@ -204,24 +204,25 @@ under.
 **The database** - a consistent copy while the server keeps running, no
 pause needed:
 
-```
+```sh
 docker compose exec -T voidgrid-secrets voidgrid-secrets backup > voidgrid.db
 ```
 
 `-T` is needed: `docker compose exec` otherwise allocates a terminal, and
-the command refuses to write a database to a terminal. Don't copy `/data/voidgrid.db` out of a running container by hand - a live
+the command refuses to write a database to a terminal. Don't copy `/data/voidgrid.db` out of a running
+container by hand - a live
 SQLite file is not safe to copy that way.
 
 **The root key** - copy its volume. Find the real volume names first
 (compose prefixes them with the project name):
 
-```
+```sh
 docker volume ls | grep voidgrid
 ```
 
 Then, substituting the key volume's name:
 
-```
+```sh
 docker run --rm -v KEY_VOLUME:/v:ro -v "$PWD":/backup alpine tar czf /backup/voidgrid-root-key.tgz -C /v .
 ```
 
@@ -231,11 +232,11 @@ you trust, and consider storing it apart from the database copy.
 **Restore** - stop the server, put the database file back, restore the key,
 start:
 
-```
+```sh
 docker compose stop voidgrid-secrets; docker run --rm -v DATA_VOLUME:/d -v "$PWD":/backup alpine sh -c 'rm -f /d/voidgrid.db /d/voidgrid.db-wal /d/voidgrid.db-shm; cp /backup/voidgrid.db /d/voidgrid.db; chown 1000:1000 /d /d/voidgrid.db; chmod 600 /d/voidgrid.db'
 ```
 
-```
+```sh
 docker run --rm -v KEY_VOLUME:/v -v "$PWD":/backup alpine sh -c 'rm -rf /v/* /v/.[!.]* ; tar xzf /backup/voidgrid-root-key.tgz -C /v'; docker compose start voidgrid-secrets
 ```
 
@@ -249,11 +250,11 @@ it when you mean to. Restore the database and the key from the same backup.
 The image includes the `sqlite3` command-line tool. Open the database
 **read-only** - it is safe while the server runs - to check on it:
 
-```
+```sh
 docker compose exec voidgrid-secrets sqlite3 -readonly /data/voidgrid.db "SELECT (SELECT count(*) FROM secrets) AS secrets, (SELECT count(*) FROM machine_tokens) AS tokens, (SELECT count(*) FROM machine_token_grants) AS grants, (SELECT count(*) FROM audit_log) AS audit"
 ```
 
-```
+```sh
 docker compose exec voidgrid-secrets sqlite3 -readonly /data/voidgrid.db "PRAGMA integrity_check"
 ```
 
@@ -276,18 +277,20 @@ old container, then an upgrade:
    instructions).
 2. **Export**, still on the old image:
 
-   ```
+   ```sh
    docker compose exec voidgrid-secrets wget -qO /data/voidgrid.db http://127.0.0.1:4001/db/backup
    ```
+
 3. **Upgrade**:
 
-   ```
+   ```sh
    docker compose pull voidgrid-secrets; docker compose up -d voidgrid-secrets
    ```
+
 4. **Check** that you can sign in and that your tokens still work. Then
    optionally reclaim the old store:
 
-   ```
+   ```sh
    docker compose exec voidgrid-secrets rm -rf /data/rqlite
    ```
 
@@ -303,7 +306,7 @@ you set them.
    [Moving from rqlite](#moving-from-rqlite) instead - it is a one-time step.
 2. Change the image tag in your compose file (or keep `:beta`), then:
 
-```
+```sh
 docker compose pull voidgrid-secrets; docker compose up -d voidgrid-secrets
 ```
 
@@ -338,7 +341,7 @@ The first three are set in the image (the export directory follows the database 
 them. `VOIDGRID_HTTP_ALLOWED_NETS` is yours to set.
 
 | Variable | Default in the image | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `VOIDGRID_LISTEN_ADDR` | `0.0.0.0:8780` | Address the API + web UI bind to |
 | `VOIDGRID_DB_PATH` | `/data/voidgrid.db` | The SQLite database file |
 | `VOIDGRID_ROOT_KEY_PATH` | `/run/secrets/voidgrid-root-key` | Root encryption key file |
